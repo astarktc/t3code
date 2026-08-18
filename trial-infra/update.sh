@@ -73,8 +73,13 @@ if [[ $DO_BUILD -eq 1 ]]; then
     pnpm dist:desktop:dmg:arm64
   echo "== artifacts in release/:"
   ls -la release/ | grep -v '^total'
-  APP_PATH=$(find release -maxdepth 2 -name "$APP_NAME" -type d | head -1 || true)
-  if [[ -n "${APP_PATH:-}" ]]; then
+  # The .app only ships inside the dmg/zip (staging dir is cleaned up);
+  # extract the zip to verify the update feed is absent and to install.
+  ZIP=$(ls -t release/T3-Code-*-arm64.zip 2>/dev/null | head -1 || true)
+  if [[ -n "${ZIP:-}" ]]; then
+    EXTRACT_DIR=$(mktemp -d /tmp/t3code-app.XXXXXX)
+    ditto -x -k "$ZIP" "$EXTRACT_DIR"
+    APP_PATH="$EXTRACT_DIR/$APP_NAME"
     if ! [[ -e "$APP_PATH/Contents/Resources/app-update.yml" ]]; then
       echo "== auto-update check: no app-update.yml in bundle -> updater disabled ✓"
     else
@@ -86,8 +91,9 @@ if [[ $DO_BUILD -eq 1 ]]; then
       ditto "$APP_PATH" "/Applications/$APP_NAME"
       echo "== installed: /Applications/$APP_NAME (state stays in ~/.t3)"
     fi
+    rm -rf "$EXTRACT_DIR"
   else
-    echo "WARNING: could not locate built .app under release/" >&2
+    echo "WARNING: no zip artifact found under release/" >&2
   fi
 fi
 
