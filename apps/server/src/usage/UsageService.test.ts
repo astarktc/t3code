@@ -89,7 +89,10 @@ const serviceLayers = (input: {
       ),
     ),
     Layer.provideMerge(
-      Layer.succeed(HostProcessEnvironment, { GROK_HOME: NodePath.join(input.home, "grok") }),
+      Layer.succeed(HostProcessEnvironment, {
+        GROK_HOME: NodePath.join(input.home, "grok"),
+        PI_CODING_AGENT_DIR: NodePath.join(input.home, "pi"),
+      }),
     ),
   );
 

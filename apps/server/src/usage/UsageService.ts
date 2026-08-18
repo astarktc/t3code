@@ -43,6 +43,7 @@ import { ServerConfig } from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
+import { resolvePiAgentDir } from "../provider/Drivers/PiHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
@@ -259,6 +260,7 @@ export const make = Effect.gen(function* () {
       grokHomeEnv.length > 0
         ? path.resolve(expandHomePath(grokHomeEnv))
         : path.join(NodeOS.homedir(), ".grok");
+    const piAgentDir = yield* resolvePiAgentDir(hostEnvironment);
 
     return [
       { provider: "claude" as const, dir: claudeDir },
@@ -268,6 +270,7 @@ export const make = Effect.gen(function* () {
         dir: path.join(grokHome, "sessions"),
         fileName: "updates.jsonl",
       },
+      { provider: "pi" as const, dir: path.join(piAgentDir, "sessions") },
     ];
   });
 

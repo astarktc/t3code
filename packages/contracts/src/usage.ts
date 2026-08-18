@@ -3,9 +3,10 @@
  *
  * Each environment scans the provider CLIs' own on-disk session transcripts
  * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`,
- * `~/.grok/sessions/**\/updates.jsonl`) rather than relying on T3 Code's own
- * orchestration projections, so usage stays complete even for turns that were
- * never driven through T3 Code. This mirrors the approach `ccusage` takes.
+ * `~/.grok/sessions/**\/updates.jsonl`, `~/.pi/agent/sessions/**\/*.jsonl`)
+ * rather than relying on T3 Code's own orchestration projections, so usage
+ * stays complete even for turns that were never driven through T3 Code. This
+ * mirrors the approach `ccusage` takes.
  *
  * Environments return pre-aggregated `(day, hourStart?, provider, model)`
  * buckets. Raw transcript records never cross the wire.
@@ -32,7 +33,8 @@ export const USAGE_CONTRACT_VERSION = 5 as const;
  */
 export const USAGE_MERGE_COMPATIBLE_SINCE = 4 as const;
 
-export const UsageProviderKind = Schema.Literals(["claude", "codex", "grok"]);
+// Trial patch (QM-81): `pi` added on top of upstream's provider set.
+export const UsageProviderKind = Schema.Literals(["claude", "codex", "grok", "pi"]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
