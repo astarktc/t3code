@@ -19,10 +19,12 @@ import type { UsageProviderKind } from "@t3tools/contracts";
 
 import {
   initialCodexScanState,
+  initialPiScanState,
   mightCarryUsage,
   parseClaudeLine,
   parseCodexLine,
   parseGrokLine,
+  parsePiLine,
   type UsageRecord,
 } from "./usageTranscripts.ts";
 
@@ -119,6 +121,7 @@ export async function readTranscriptRecords(
 ): Promise<readonly UsageRecord[] | null> {
   const records: UsageRecord[] = [];
   const codexState = initialCodexScanState();
+  const piState = initialPiScanState();
 
   try {
     const lines = NodeReadline.createInterface({
@@ -143,6 +146,21 @@ export async function readTranscriptRecords(
       if (provider === "grok") {
         if (!mightCarryUsage(line, provider)) continue;
         for (const grokRecord of parseGrokLine(line)) records.push(grokRecord);
+        continue;
+      }
+
+      if (provider === "pi") {
+        // Session id and model fallback ride on lines that carry no usage of
+        // their own, so those must still reach the reducer.
+        if (
+          !mightCarryUsage(line, provider) &&
+          !line.includes('"type":"session"') &&
+          !line.includes('"model_change"')
+        ) {
+          continue;
+        }
+        const record = parsePiLine(line, piState);
+        if (record !== null) records.push(record);
         continue;
       }
 
