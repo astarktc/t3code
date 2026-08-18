@@ -60,7 +60,64 @@ function codexUsageLine(outputTokens: number, secondsOffset: number): string {
   })}\n`;
 }
 
+function piSessionLine(): string {
+  return `${JSON.stringify({
+    type: "session",
+    version: 3,
+    id: "pi-session-1",
+    timestamp: "2026-08-01T10:00:00Z",
+  })}\n`;
+}
+
+function piModelChangeLine(modelId: string): string {
+  return `${JSON.stringify({
+    type: "model_change",
+    id: "mc_1",
+    timestamp: "2026-08-01T10:00:01Z",
+    provider: "anthropic",
+    modelId,
+  })}\n`;
+}
+
+function piUsageLine(id: number, outputTokens: number): string {
+  return `${JSON.stringify({
+    type: "message",
+    id: `pi_msg_${id}`,
+    timestamp: "2026-08-01T10:00:05Z",
+    message: {
+      role: "assistant",
+      // No `model` of its own: attribution must come from the reducer state.
+      usage: {
+        input: 10,
+        output: outputTokens,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { total: 0.01 },
+      },
+    },
+  })}\n`;
+}
+
 describe("readTranscriptRecords resume", () => {
+  it("carries the Pi reducer state across the resume boundary", async () => {
+    const path = NodePath.join(dir, "pi-session.jsonl");
+    await NodeFSP.writeFile(path, piSessionLine() + piModelChangeLine("claude-fable-5"));
+    const first = await readTranscriptRecords(path, "pi");
+    assert.isNotNull(first);
+    assert.strictEqual(first.records.length, 0);
+    assert.isNotNull(first.position.piState);
+    assert.isNull(first.position.codexState);
+
+    await NodeFSP.appendFile(path, piUsageLine(1, 7));
+    const second = await readTranscriptRecords(path, "pi", first.position);
+    assert.isNotNull(second);
+    assert.isTrue(second.resumed);
+    assert.strictEqual(second.records.length, 1);
+    assert.strictEqual(second.records[0]?.model, "claude-fable-5");
+    assert.strictEqual(second.records[0]?.sessionId, "pi-session-1");
+    assert.strictEqual(second.records[0]?.totals.outputTokens, 7);
+  });
+
   it("parses only appended lines when resuming a grown file", async () => {
     const path = NodePath.join(dir, "claude.jsonl");
     await NodeFSP.writeFile(path, claudeLine(1, 5) + claudeLine(2, 7));
