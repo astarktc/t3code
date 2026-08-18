@@ -111,6 +111,7 @@ const serviceLayers = (input: {
         ANTIGRAVITY_DATA_DIR: NodePath.join(input.home, "antigravity"),
         XDG_CONFIG_HOME: NodePath.join(input.home, "config"),
         APPDATA: NodePath.join(input.home, "config"),
+        PI_CODING_AGENT_DIR: NodePath.join(input.home, "pi"),
         ...input.environment,
       }),
     ),
