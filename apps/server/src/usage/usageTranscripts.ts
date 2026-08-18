@@ -68,7 +68,7 @@ export function totalTokens(totals: UsageTokenTotals): number {
  * an order of magnitude.
  */
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
-  if (provider === "claude") return line.includes('"usage"');
+  if (provider === "claude" || provider === "pi") return line.includes('"usage"');
   if (provider === "grok") return line.includes('"turn_completed"');
   return line.includes('"token_count"');
 }
@@ -146,6 +146,113 @@ export function parseClaudeLine(line: string): UsageRecord | null {
     },
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
     dedupeKey,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pi                                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Rolling state for a single Pi session file.
+ *
+ * The session id lives on the leading `{"type":"session"}` line, and
+ * `model_change` lines provide a model fallback for the rare assistant
+ * message that carries no `model` of its own.
+ */
+export interface PiScanState {
+  model: string;
+  sessionId: string;
+}
+
+export function initialPiScanState(): PiScanState {
+  return { model: "", sessionId: "" };
+}
+
+/**
+ * Feeds one line of a Pi session transcript into `state`, returning a record
+ * when the line was an assistant message carrying usage.
+ *
+ * Pi writes exactly one complete `usage` object per assistant message (no
+ * per-content-block repetition), with token counts that are mutually disjoint
+ * (`totalTokens = input + cacheRead + cacheWrite + output`) and a
+ * provider-reported USD `cost.total`. Forked/subagent sessions copy parent
+ * messages into the child file with their original ids and timestamps, so the
+ * dedupe key is the message id plus timestamp.
+ */
+export function parsePiLine(line: string, state: PiScanState): UsageRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+
+  const record = parsed as Record<string, unknown>;
+  const type = record["type"];
+
+  if (type === "session") {
+    // Only the first session line names this file's own session.
+    if (state.sessionId.length === 0 && typeof record["id"] === "string") {
+      state.sessionId = record["id"];
+    }
+    return null;
+  }
+
+  if (type === "model_change") {
+    if (typeof record["modelId"] === "string") state.model = record["modelId"];
+    return null;
+  }
+
+  if (type !== "message") return null;
+
+  const message = record["message"];
+  if (typeof message !== "object" || message === null) return null;
+  const messageRecord = message as Record<string, unknown>;
+  if (messageRecord["role"] !== "assistant") return null;
+
+  const usage = messageRecord["usage"];
+  if (typeof usage !== "object" || usage === null) return null;
+  const usageRecord = usage as Record<string, unknown>;
+
+  const timestampMs = parseTimestampMs(record["timestamp"]);
+  if (timestampMs === null) return null;
+
+  const ownModel = typeof messageRecord["model"] === "string" ? messageRecord["model"] : "";
+  const model = ownModel.length > 0 ? ownModel : state.model;
+  if (model.length === 0) return null;
+
+  const totals: UsageTokenTotals = {
+    // Pi reports `input` exclusive of the cached portions.
+    uncachedInputTokens: int(usageRecord["input"]),
+    cachedInputTokens: int(usageRecord["cacheRead"]),
+    cacheCreationTokens: int(usageRecord["cacheWrite"]),
+    outputTokens: int(usageRecord["output"]),
+    // Pi folds thinking tokens into output and does not break them out.
+    reasoningTokens: 0,
+  };
+
+  if (totalTokens(totals) === 0) return null;
+
+  const cost = usageRecord["cost"];
+  const costTotal =
+    typeof cost === "object" && cost !== null
+      ? (cost as Record<string, unknown>)["total"]
+      : undefined;
+
+  const messageId = typeof record["id"] === "string" ? record["id"] : null;
+
+  return {
+    provider: "pi",
+    timestampMs,
+    model,
+    sessionId: state.sessionId,
+    totals,
+    reportedCostUsd: typeof costTotal === "number" && Number.isFinite(costTotal) ? costTotal : null,
+    // Forked/subagent session files replay parent messages verbatim; id plus
+    // timestamp drops those copies while staying unique across sessions.
+    dedupeKey: messageId === null ? null : `pi:${messageId}:${timestampMs}`,
   };
 }
 
