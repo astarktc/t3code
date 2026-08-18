@@ -20,6 +20,10 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+# Native resource-monitor needs cargo; rustup installs live in ~/.cargo/bin,
+# which non-interactive shells don't have on PATH.
+export PATH="$HOME/.cargo/bin:$PATH"
+
 BRANCH=trial
 REMOTE=stienswout
 REMOTE_BRANCH=t3code/pi-provider
