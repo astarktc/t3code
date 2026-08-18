@@ -30,6 +30,11 @@ export const PROVIDER_PRESENTATION = {
     color: "color-mix(in oklab, var(--contrast-foreground) 72%, var(--background))",
     driverKind: ProviderDriverKind.make("grok"),
   },
+  pi: {
+    label: "Pi",
+    color: "#8b5cf6",
+    driverKind: ProviderDriverKind.make("pi"),
+  },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 
 /** Stable provider reading order across charts, summaries, tables, and hover rows. */
