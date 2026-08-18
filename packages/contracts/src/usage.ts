@@ -2,7 +2,9 @@
  * Usage reporting contract.
  *
  * Each environment scans native session files and databases, including work
- * driven outside T3 Code. Source status describes gaps in local coverage.
+ * driven outside T3 Code (trial patch QM-81: also Pi's
+ * `~/.pi/agent/sessions/**\/*.jsonl`). Source status describes gaps in local
+ * coverage.
  *
  * Environments return pre-aggregated `(day, hourStart?, provider, model, sourcePath?)`
  * buckets. Raw transcript records never cross the wire.
@@ -30,6 +32,7 @@ export const USAGE_CONTRACT_VERSION = 6 as const;
  */
 export const USAGE_MERGE_COMPATIBLE_SINCE = 4 as const;
 
+// Trial patch (QM-81): `pi` added on top of upstream's provider set.
 export const UsageProviderKind = Schema.Literals([
   "claude",
   "codex",
@@ -37,6 +40,7 @@ export const UsageProviderKind = Schema.Literals([
   "cursor",
   "opencode",
   "antigravity",
+  "pi",
 ]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 

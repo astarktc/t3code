@@ -25,6 +25,7 @@ import { createTranscriptJsonReader } from "../project/AgentSessionJson.ts";
 
 import {
   initialCodexScanState,
+  initialPiScanState,
   mightCarryUsage,
   parseClaudeLine,
   parseClaudeRecord,
@@ -32,7 +33,10 @@ import {
   parseCodexRecord,
   parseGrokLine,
   parseGrokRecord,
+  parsePiLine,
+  parsePiRecord,
   type CodexScanState,
+  type PiScanState,
   type UsageRecord,
 } from "./usageTranscripts.ts";
 
@@ -62,6 +66,8 @@ export interface TranscriptParsePosition {
   readonly guardHash: number;
   /** Codex reducer state as of `resumeOffset`; `null` for stateless providers. */
   readonly codexState: CodexScanState | null;
+  /** Pi reducer state as of `resumeOffset`; `null` for other providers. */
+  readonly piState: PiScanState | null;
 }
 
 export interface TranscriptParseResult {
@@ -91,7 +97,7 @@ type SelectedFields = { readonly [key: string]: true | SelectedFields };
 
 // Keep the fields consumed by usageTranscripts, including reducer state and
 // dedupe/cost metadata. A selected subtree (usage) keeps future token fields.
-const USAGE_FIELDS: Record<"claude" | "codex" | "grok", SelectedFields> = {
+const USAGE_FIELDS: Record<"claude" | "codex" | "grok" | "pi", SelectedFields> = {
   claude: {
     type: true,
     timestamp: true,
@@ -121,10 +127,22 @@ const USAGE_FIELDS: Record<"claude" | "codex" | "grok", SelectedFields> = {
       update: { sessionUpdate: true, prompt_id: true, usage: true },
     },
   },
+  // `id` names the session on a `session` line and the message elsewhere;
+  // `modelId` is the `model_change` fallback model.
+  pi: {
+    type: true,
+    id: true,
+    timestamp: true,
+    modelId: true,
+    message: { role: true, model: true, usage: true },
+  },
 };
 
 function selectUsageFields(provider: UsageProviderKind) {
-  const fields = USAGE_FIELDS[provider === "codex" || provider === "grok" ? provider : "claude"];
+  const fields =
+    USAGE_FIELDS[
+      provider === "codex" || provider === "grok" || provider === "pi" ? provider : "claude"
+    ];
   return (path: ReadonlyArray<string | number | null>): boolean => {
     let selected: true | SelectedFields = fields;
     for (const key of path) {
@@ -265,20 +283,28 @@ export async function readTranscriptRecords(
 
   try {
     let codexState = initialCodexScanState();
+    let piState = initialPiScanState();
     let resumed = false;
     let start = 0;
     if (
       resumeFrom !== undefined &&
       resumeFrom.resumeOffset > 0 &&
       (provider !== "codex" || resumeFrom.codexState !== null) &&
+      (provider !== "pi" || resumeFrom.piState != null) &&
       (await guardMatches(handle, resumeFrom))
     ) {
       if (resumeFrom.codexState !== null) codexState = { ...resumeFrom.codexState };
+      if (resumeFrom.piState != null) piState = { ...resumeFrom.piState };
       start = resumeFrom.resumeOffset;
       resumed = true;
     }
 
-    const parseLine = (line: string, state: CodexScanState, out: UsageRecord[]): void => {
+    interface ScanStates {
+      readonly codex: CodexScanState;
+      readonly pi: PiScanState;
+    }
+
+    const parseLine = (line: string, state: ScanStates, out: UsageRecord[]): void => {
       if (provider === "codex") {
         if (
           !mightCarryUsage(line, provider) &&
@@ -287,7 +313,21 @@ export async function readTranscriptRecords(
         ) {
           return;
         }
-        const record = parseCodexLine(line, state);
+        const record = parseCodexLine(line, state.codex);
+        if (record !== null) out.push(record);
+        return;
+      }
+      if (provider === "pi") {
+        // Pi session and model_change lines carry no usage but feed the reducer
+        // (session id, model fallback), so they must reach parsePiLine.
+        if (
+          !mightCarryUsage(line, provider) &&
+          !line.includes('"type":"session"') &&
+          !line.includes('"model_change"')
+        ) {
+          return;
+        }
+        const record = parsePiLine(line, state.pi);
         if (record !== null) out.push(record);
         return;
       }
@@ -309,6 +349,7 @@ export async function readTranscriptRecords(
     };
 
     const records: UsageRecord[] = [];
+    const states: ScanStates = { codex: codexState, pi: piState };
     // Byte offsets remain independent of UTF-8 decoding. Only complete lines
     // commit the resume point; an unfinished tail is replayed on the next scan.
     let resumeOffset = start;
@@ -336,7 +377,7 @@ export async function readTranscriptRecords(
       }
       streaming.write(decoder!.write(segment));
     };
-    const finish = (state: CodexScanState, out: UsageRecord[]) => {
+    const finish = (state: ScanStates, out: UsageRecord[]) => {
       if (streaming) {
         streaming.write(decoder!.end());
         const projected = streaming.finish();
@@ -345,8 +386,10 @@ export async function readTranscriptRecords(
         } else {
           const record =
             provider === "codex"
-              ? parseCodexRecord(projected, state)
-              : parseClaudeRecord(projected);
+              ? parseCodexRecord(projected, state.codex)
+              : provider === "pi"
+                ? parsePiRecord(projected, state.pi)
+                : parseClaudeRecord(projected);
           if (record !== null) out.push(record);
         }
       } else if (pendingBytes > 0) {
@@ -377,10 +420,10 @@ export async function readTranscriptRecords(
         // Most lines fit in the current chunk. Avoid buffering/streaming
         // machinery on this hot path.
         if (!streaming && pendingBytes === 0) {
-          parseLine(toLineString(chunk.subarray(lineStart, newlineIndex)), codexState, records);
+          parseLine(toLineString(chunk.subarray(lineStart, newlineIndex)), states, records);
         } else {
           append(chunk.subarray(lineStart, newlineIndex));
-          finish(codexState, records);
+          finish(states, records);
         }
         lineStart = newlineIndex + 1;
         resumeOffset = scanOffset + lineStart;
@@ -389,7 +432,7 @@ export async function readTranscriptRecords(
     }
 
     const tailRecords: UsageRecord[] = [];
-    finish({ ...codexState }, tailRecords);
+    finish({ codex: { ...codexState }, pi: { ...piState } }, tailRecords);
 
     const guardLength = Math.min(GUARD_LENGTH, resumeOffset);
     let guardHash = 0;
@@ -407,6 +450,7 @@ export async function readTranscriptRecords(
         guardLength,
         guardHash,
         codexState: provider === "codex" ? codexState : null,
+        piState: provider === "pi" ? piState : null,
       },
       resumed,
     };
