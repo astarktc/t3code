@@ -46,14 +46,44 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
-# 2. Fetch + rebase local patches onto the moving PR branch
+# 2. Fetch + rebase local patches onto the moving PR branch.
+#    Always rebase with --onto <new-remote-head> <old-remote-head>: this replays
+#    exactly our local commits and is force-push-safe (a plain `git rebase` after
+#    an upstream force-push tries to replay hundreds of old-SHA stack commits).
+OLD_BASE=$(git rev-parse "$REMOTE/$REMOTE_BRANCH")
 git fetch "$REMOTE" "$REMOTE_BRANCH"
 git fetch upstream main --quiet || true   # reference only; PR branches stack on V2, not main
+NEW_BASE=$(git rev-parse "$REMOTE/$REMOTE_BRANCH")
 git checkout "$BRANCH"
 BEFORE=$(git rev-parse --short HEAD)
-git rebase "$REMOTE/$REMOTE_BRANCH"
+if [[ "$OLD_BASE" != "$NEW_BASE" ]] && ! git merge-base --is-ancestor "$OLD_BASE" "$NEW_BASE"; then
+  echo "== NOTE: upstream force-push detected ($(git rev-parse --short "$OLD_BASE") -> $(git rev-parse --short "$NEW_BASE"))"
+  echo "==       after the rebase, check whether local patches were superseded upstream"
+  echo "==       (2 of 3 were absorbed at the 2026-08-28 force-push)."
+fi
+git rebase --onto "$NEW_BASE" "$OLD_BASE" "$BRANCH"
 AFTER=$(git rev-parse --short HEAD)
-echo "== rebased $BRANCH: $BEFORE -> $AFTER (base: $(git rev-parse --short "$REMOTE/$REMOTE_BRANCH"))"
+echo "== rebased $BRANCH: $BEFORE -> $AFTER (base: $(git rev-parse --short "$NEW_BASE"))"
+
+# 2b. Migration-renumber tripwire: if an already-existing migration's numeric id
+#     changed between the old and new base, a DB that ran the old numbering will
+#     crash-loop the packaged backend on launch ("table ... already exists") with
+#     NO WINDOW and no visible error. Detect it here, before anyone ships a build.
+mig_pairs() {  # $1 = commit-ish -> lines of "Name id"
+  git show "$1:apps/server/src/persistence/Migrations.ts" 2>/dev/null \
+    | sed -n 's/^[[:space:]]*\[\([0-9][0-9]*\), "\([A-Za-z0-9]*\)".*/\2 \1/p'
+}
+RENUMBERED=$(join <(mig_pairs "$OLD_BASE" | sort) <(mig_pairs "$NEW_BASE" | sort) \
+  | awk '$2 != $3 {printf "     %s: %s -> %s\n", $1, $2, $3}')
+if [[ -n "$RENUMBERED" ]]; then
+  echo "== WARNING: upstream RENUMBERED existing DB migrations:"
+  echo "$RENUMBERED"
+  echo "==   A ~/.t3/userdata/state.sqlite that ran the old numbering will crash-loop"
+  echo "==   the new build's backend (app launches with no window). Reconcile the"
+  echo "==   effect_sql_migrations ledger before first launch — see the 2026-08-28"
+  echo "==   instance script trial-infra/fix-migration-renumber-20260828.sh and"
+  echo "==   trial-infra/README.md for the general pattern."
+fi
 
 # 3. Backup the rebased branch to our fork
 if [[ $DO_PUSH -eq 1 ]]; then
