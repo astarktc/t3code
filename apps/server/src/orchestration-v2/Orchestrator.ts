@@ -6954,24 +6954,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       };
     }
 
+    // Local patch (upstream report: #2829 comment 5466160819): no lifetime
+    // delivery cap. delegate_task promises a wake on every async child
+    // terminal; the cap turned that into silent starvation for third-wave
+    // completions. Recursion stays bounded without it: at most one delivery
+    // is in flight and one reserved, and each child settles at most once.
+    // settledDeliveryCount remains as metadata.
     const settledDeliveryCount = cohort?.settledDeliveryCount ?? 0;
-    if (settledDeliveryCount >= 2) {
-      // A cohort permits one initial delivery and one successor. Keep the
-      // result pending and inspectable instead of recursively re-arming the
-      // parent for every child that finishes after that bounded handoff.
-      return {
-        task: {
-          ...input.updatedTask,
-          completionDelivery: {
-            state: "pending" as const,
-            observedByRunId: null,
-          },
-        },
-        parentRun: undefined,
-        message: undefined,
-        offer: false,
-      };
-    }
     const generation = cohort?.nextGeneration ?? 1;
     const messageId = yield* mapDelegatedCompletionError(
       idAllocator.allocate.message({
@@ -7321,11 +7310,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         )
         .map((task) => task.id);
       const settledDeliveryCount = (cohort.settledDeliveryCount ?? 0) + 1;
+      // Local patch (#2829 comment 5466160819): follow-up reservation is not
+      // capped by settledDeliveryCount — see planDelegatedCompletionDelivery.
       const canReserveFollowUp =
         cohort.disposition === "open" &&
         projection.thread.archivedAt === null &&
         projection.thread.deletedAt === null &&
-        settledDeliveryCount < 2 &&
         pendingTaskIds.length > 0;
       const nextDelivery = canReserveFollowUp
         ? {

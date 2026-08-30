@@ -2696,9 +2696,10 @@ describe("orchestrator MCP toolkit", () => {
               return yield* Effect.die(new Error("Late completion successor delivery missing."));
             }
 
-            // The bounded successor can coalesce a late result only once. A
-            // third terminal after that successor has started remains
-            // inspectable, but cannot recursively create a third parent run.
+            // Local patch (#2829 comment 5466160819): no lifetime delivery
+            // cap. A third terminal after the successor has started stays
+            // pending only until that successor settles, then reserves a
+            // third delivery — every child terminal wakes the parent.
             const successorGate = yield* Deferred.make<void>();
             deliveryTerminalGates.set(lateParentThreadId, successorGate);
             yield* orchestrator.dispatch({
@@ -2761,7 +2762,7 @@ describe("orchestrator MCP toolkit", () => {
                   ?.completionDelivery?.state === "pending",
             );
             yield* Deferred.succeed(successorGate, undefined);
-            const exhaustedCohort = yield* waitForProjection(
+            const thirdReserved = yield* waitForProjection(
               orchestrator,
               lateParentThreadId,
               (projection) => {
@@ -2770,18 +2771,29 @@ describe("orchestrator MCP toolkit", () => {
                 )?.delegatedCompletion;
                 return (
                   cohort?.settledDeliveryCount === 2 &&
-                  cohort.delivery === null &&
+                  cohort.delivery !== null &&
+                  cohort.delivery !== undefined &&
+                  cohort.delivery.generation === successorDelivery.generation + 1 &&
+                  cohort.delivery.taskIds.length === 1 &&
+                  cohort.delivery.taskIds[0] === thirdLateTask.id &&
                   projection.runs.find((run) => run.id === activeSuccessorRun.id)?.status ===
                     "completed" &&
                   projection.subagents.find((task) => task.id === thirdLateTask.id)
-                    ?.completionDelivery?.state === "pending"
+                    ?.completionDelivery?.state === "claimed"
                 );
               },
             );
             expect(
-              exhaustedCohort.runs.find((run) => run.id === lateParentRun.id)?.delegatedCompletion,
-            ).toMatchObject({ settledDeliveryCount: 2, delivery: null });
-            yield* expectOffersToStay(2);
+              thirdReserved.runs.find((run) => run.id === lateParentRun.id)?.delegatedCompletion,
+            ).toMatchObject({
+              settledDeliveryCount: 2,
+              delivery: {
+                generation: successorDelivery.generation + 1,
+                taskIds: [thirdLateTask.id],
+              },
+            });
+            const thirdOffers = yield* waitForContinuationOffers(3);
+            expect(thirdOffers).toHaveLength(3);
 
             // Queue Remove is a durable disposal action, not a local queue
             // edit. Start a fresh parent-run cohort so removing this delivery
