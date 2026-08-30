@@ -2041,6 +2041,19 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* Local patch (upstream report: pingdotgg/t3code#8705): in expanded
+   (word-wrap) mode, fit the table to the content lane instead of laying out
+   at max-content width — auto table layout distributes the lane width and
+   prose cells wrap; headers may wrap too. Collapsed mode keeps the
+   nowrap + ellipsis + horizontal-scroll behavior. */
+.chat-markdown .chat-markdown-table-container[data-expanded="true"] table {
+  min-width: 100%;
+}
+
+.chat-markdown .chat-markdown-table-container[data-expanded="true"] thead th {
+  white-space: normal;
+}
+
 /* Prompt-stash save acknowledgement: the new count fades up from just below
    its resting position, once, then stops. One-shot and event-driven (React
    remounts the element by key on each stash) — no continuous animation. */
