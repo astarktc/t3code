@@ -12,10 +12,12 @@
 #                                          which stacks on upstream PR #2829's V2 branch)
 #   trial      = stienswout/t3code/pi-provider + our local patches (this script, etc.)
 #
-# Usage: trial-infra/update.sh [--no-build] [--install] [--no-push]
-#   --no-build  fetch + rebase + pnpm install only
-#   --install   after building, copy the .app into /Applications (quit the app first)
-#   --no-push   skip force-pushing the rebased trial branch to origin
+# Usage: trial-infra/update.sh [--no-build] [--install] [--no-push] [--old-base <sha>]
+#   --no-build        fetch + rebase + pnpm install only
+#   --install         after building, copy the .app into /Applications (quit the app first)
+#   --no-push         skip force-pushing the rebased trial branch to origin
+#   --old-base <sha>  the PR head trial currently sits on; needed when the remote
+#                     was already fetched (the default reads the tracking ref)
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -29,14 +31,16 @@ REMOTE=stienswout
 REMOTE_BRANCH=t3code/pi-provider
 APP_NAME="T3 Code (Alpha).app"
 
-DO_BUILD=1 DO_INSTALL=0 DO_PUSH=1
-for arg in "$@"; do
-  case "$arg" in
+DO_BUILD=1 DO_INSTALL=0 DO_PUSH=1 OLD_BASE_ARG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --no-build) DO_BUILD=0 ;;
     --install)  DO_INSTALL=1 ;;
     --no-push)  DO_PUSH=0 ;;
-    *) echo "unknown flag: $arg" >&2; exit 2 ;;
+    --old-base) OLD_BASE_ARG="${2:?--old-base needs a sha}"; shift ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 # 1. Guard: clean worktree
@@ -50,7 +54,7 @@ fi
 #    Always rebase with --onto <new-remote-head> <old-remote-head>: this replays
 #    exactly our local commits and is force-push-safe (a plain `git rebase` after
 #    an upstream force-push tries to replay hundreds of old-SHA stack commits).
-OLD_BASE=$(git rev-parse "$REMOTE/$REMOTE_BRANCH")
+OLD_BASE=$(git rev-parse "${OLD_BASE_ARG:-$REMOTE/$REMOTE_BRANCH}")
 git fetch "$REMOTE" "$REMOTE_BRANCH"
 git fetch upstream main --quiet || true   # reference only; PR branches stack on V2, not main
 NEW_BASE=$(git rev-parse "$REMOTE/$REMOTE_BRANCH")
