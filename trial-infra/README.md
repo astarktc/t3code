@@ -27,7 +27,7 @@ normal case, not the exception.
 ## `update.sh` — the rebase→rebuild pipeline
 
 ```
-trial-infra/update.sh [--no-build] [--install] [--no-push]
+trial-infra/update.sh [--no-build] [--install] [--no-push] [--old-base <sha>]
 ```
 
 What it does, in order:
@@ -38,7 +38,10 @@ What it does, in order:
    patch commits** and is **force-push-safe** — a plain `git rebase` after an upstream
    force-push would try to replay hundreds of old-SHA stack commits and drown you in
    conflicts. If a force-push is detected (old head no longer an ancestor), it says so
-   and reminds you to check whether your patches were absorbed upstream.
+   and reminds you to check whether your patches were absorbed upstream. **The old head is
+   captured from the local remote-tracking ref at run time** — if you `git fetch` the PR
+   remote while pre-inspecting, old == new and the rebase degenerates into replaying the
+   whole old stack; pass the recorded old head with `--old-base <sha>` in that case.
 3. **Migration-renumber tripwire**: diffs the DB migration id/name table
    (`apps/server/src/persistence/Migrations.ts`) between the old and new base and
    **warns loudly if any existing migration's number changed** (see hazard #2 below).
@@ -100,6 +103,19 @@ Repair pattern (see the fix script for a worked example):
 5. `PRAGMA integrity_check`, relaunch.
 
 `update.sh` step 3 now detects the condition at rebase time, before you build.
+
+The hazard has a **second shape** (2026-09-09): upstream *consolidated* nine already-applied
+migrations (44–52) into one id (50) and inserted six new ones at 44–49. Effect's Migrator
+runs only ids **greater than the ledger's max**, so a DB at 52 sees a code max of 50 and runs
+*nothing* — no crash, the new columns/indexes just never land and queries fail later. Same
+repair pattern (verify the folded bodies are identical, apply the inserted migrations by
+hand, rewrite the ledger); worked example: `fix-migration-consolidation-20260909.sh`.
+`update.sh` warns about removed/consolidated migration names alongside the renumber check.
+
+| Ledger vs code | Symptom | Fix |
+| --- | --- | --- |
+| ledger max **below** the renumbered ids | migrations re-run → `table already exists` → crash-loop, no window | renumber ledger, apply inserted ALTERs |
+| ledger max **above** the code max (consolidation) | silent: nothing runs, schema drifts | apply inserted migrations by hand, rewrite ledger to the new sequence |
 
 ### 3. Don't try to out-rebase the maintainers
 
