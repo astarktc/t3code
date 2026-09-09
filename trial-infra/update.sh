@@ -84,6 +84,18 @@ if [[ -n "$RENUMBERED" ]]; then
   echo "==   instance script trial-infra/fix-migration-renumber-20260828.sh and"
   echo "==   trial-infra/README.md for the general pattern."
 fi
+# Consolidation tripwire: migrations that vanished from the table (folded into
+# another id) leave an old DB's ledger max ABOVE the code's max, so the Migrator
+# runs nothing and any newly inserted migrations are silently skipped (the
+# 2026-09-09 shape: old V2 block 44-52 folded into a single 50, new 44-49
+# inserted). See trial-infra/fix-migration-consolidation-20260909.sh.
+REMOVED=$(comm -23 <(mig_pairs "$OLD_BASE" | cut -d' ' -f1 | sort) <(mig_pairs "$NEW_BASE" | cut -d' ' -f1 | sort) | tr '\n' ' ')
+if [[ -n "$REMOVED" ]]; then
+  echo "== WARNING: migrations REMOVED/CONSOLIDATED upstream: $REMOVED"
+  echo "==   If the installed DB's ledger max exceeds the new code's max id, the new"
+  echo "==   build will SILENTLY skip every inserted migration — reconcile the ledger"
+  echo "==   by hand (pattern: trial-infra/fix-migration-consolidation-20260909.sh)."
+fi
 
 # 3. Backup the rebased branch to our fork
 if [[ $DO_PUSH -eq 1 ]]; then
