@@ -7,10 +7,11 @@
 #
 # Tracking layout (repo: ~/Projects/forks/t3code):
 #   origin     = astarktc/t3code          (our GitHub fork; backup of trial branch)
-#   upstream   = pingdotgg/t3code         (canonical upstream, reference only)
-#   stienswout = StiensWout/t3code        (PR #7211 source; branch t3code/pi-provider,
-#                                          which stacks on upstream PR #2829's V2 branch)
-#   trial      = stienswout/t3code/pi-provider + our local patches (this script, etc.)
+#   upstream   = pingdotgg/t3code         (canonical upstream; ALSO the base branch source)
+#   stienswout = StiensWout/t3code        (historical: PR #7211 source, squash-merged
+#                                          into the V2 branch 2026-09-10; no longer tracked)
+#   trial      = upstream/t3code/codex-turn-mapping (PR #2829 V2, now incl. the Pi
+#                provider) + our local patches (this script, etc.)
 #
 # Usage: trial-infra/update.sh [--no-build] [--install] [--no-push] [--old-base <sha>]
 #   --no-build        fetch + rebase + pnpm install only
@@ -27,8 +28,12 @@ cd "$(git rev-parse --show-toplevel)"
 export PATH="$HOME/.cargo/bin:$PATH"
 
 BRANCH=trial
-REMOTE=stienswout
-REMOTE_BRANCH=t3code/pi-provider
+# Lineage collapsed 2026-09-10: PR #7211 (Pi provider) was squash-merged INTO the
+# Orchestrator V2 branch, so the StiensWout layer is gone and trial now stacks
+# directly on the maintainer's V2 branch. Next layer to disappear: #2829 -> main,
+# which is this fork's exit condition (QM-116).
+REMOTE=upstream
+REMOTE_BRANCH=t3code/codex-turn-mapping
 APP_NAME="T3 Code (Alpha).app"
 
 DO_BUILD=1 DO_INSTALL=0 DO_PUSH=1 OLD_BASE_ARG=""

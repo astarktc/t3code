@@ -12,15 +12,23 @@ pingdotgg/t3code  main                      ← canonical upstream, multiple com
         │  (periodically rebased onto)
 pingdotgg/t3code  t3code/codex-turn-mapping ← PR #2829 "Orchestration V2" — a maintainer
         │                                     branch ON the upstream repo, force-pushed
-        │                                     at each rebase onto main
-StiensWout/t3code t3code/pi-provider        ← PR #7211 (Pi provider), re-stacked on each
-        │                                     V2 snapshot (also force-pushed)
-trial (this repo)                           ← the PR head + our local patches, replayed
+        │                                     at each rebase onto main. Since 2026-09-10
+        │                                     it also CONTAINS the Pi provider (#7211,
+        │                                     squash-merged) and the ACP standardization
+        │                                     (#6461).
+trial (this repo)                           ← the V2 head + our local patches, replayed
                                               on every update
 ```
 
+**Lineage note (2026-09-10).** This was a three-layer stack until the maintainer
+(`juliusmarminge`) squash-merged StiensWout's Pi PR into the V2 branch. One tracking layer
+is gone, and with it the per-absorption Pi-patch triage. The remaining layer, #2829 → `main`,
+is this whole pipeline's exit condition. Squash merges mean the old PR head is **not** an
+ancestor of the new base — always `--onto` with an explicitly recorded old head.
+
 Remotes as configured here: `origin` = the personal GitHub fork (backup of `trial`),
-`upstream` = pingdotgg/t3code (reference only), `stienswout` = the PR source.
+`upstream` = pingdotgg/t3code (both the canonical repo **and** the base-branch source),
+`stienswout` = historical, no longer tracked.
 **Two cascading rebase layers land on you at once** — plan for force-pushes as the
 normal case, not the exception.
 
