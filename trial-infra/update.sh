@@ -138,7 +138,14 @@ if [[ $DO_BUILD -eq 1 ]]; then
     fi
     if [[ $DO_INSTALL -eq 1 ]]; then
       echo "== installing to /Applications (quit the app first if running)"
-      rm -rf "/Applications/$APP_NAME"
+      # /Applications carries the `sunlnk` flag on macOS: the bundle DIRECTORY
+      # itself cannot be unlinked, so `rm -rf` guts the bundle and then fails on
+      # the top directory ("Permission denied") — under `set -e` that aborts
+      # BEFORE the copy, leaving no installed app at all (hit 2026-09-13 on the
+      # work Mac). Clear the contents, then populate the directory in place.
+      if [[ -d "/Applications/$APP_NAME" ]]; then
+        find "/Applications/$APP_NAME" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      fi
       ditto "$APP_PATH" "/Applications/$APP_NAME"
       echo "== installed: /Applications/$APP_NAME (state stays in ~/.t3)"
     fi
