@@ -67,13 +67,27 @@ Gotchas encoded in the script: `~/.cargo/bin` is added to PATH (a native resourc
 monitor needs cargo, and non-interactive shells don't have it); commit trial-infra
 changes with `--no-verify` (the repo's pre-commit hook assumes app-code changes).
 
-## `fix-migration-renumber-20260828.sh` — the state-repair pattern
+## `fix-migration-*.sh` — the state-repair pattern
 
-One-shot repair for the 2026-08-28 force-push, kept as the **template for the hazard
-class**. Self-guarding: no-ops unless the DB ledger matches the exact pre-fix state,
-refuses to run while the app is open, and backs up the DB first.
+One script per incident, each kept as a worked example of the hazard class. All are
+self-guarding: they no-op unless the DB ledger matches the exact pre-fix state, refuse
+to run while the app is open, and back up the DB first. Run with the app **quit** and
+**before** the new build's first launch, on every machine.
 
-## The three hazards of rebasing against this upstream
+| Script | Shape | What upstream did |
+| --- | --- | --- |
+| `fix-migration-renumber-20260828.sh` | renumber | inserted 3 migrations before applied ones (41–49 → 44–52) |
+| `fix-migration-consolidation-20260909.sh` | consolidation | folded 44–52 into one id 50, inserted 6 new at 44–49 |
+| `fix-migration-renumber-20260910.sh` | renumber | inserted 50 `ProjectionThreadPullRequests`, `OrchestrationV2` 50 → 51 |
+| `fix-migration-renumber-20260913.sh` | renumber | inserted 51 `ProjectionThreadMessageContext`, `OrchestrationV2` 51 → 52 |
+
+A repair script may legitimately **refuse** when an inserted migration backfills data by
+logic not reproducible in SQL — the 2026-09-10 one refuses if legacy linked-PR rows exist,
+because migration 50 derives each PR's host by URL parsing. In that case migrate by running
+the old build's logic or by hand, never by guessing. Plain guarded `ADD COLUMN` inserts
+(2026-09-13) are fully reproducible and never need to refuse.
+
+## The four hazards of rebasing against this upstream
 
 ### 1. Force-pushes are routine — never plain-rebase across one
 
@@ -125,7 +139,24 @@ hand, rewrite the ledger); worked example: `fix-migration-consolidation-20260909
 | ledger max **below** the renumbered ids | migrations re-run → `table already exists` → crash-loop, no window | renumber ledger, apply inserted ALTERs |
 | ledger max **above** the code max (consolidation) | silent: nothing runs, schema drifts | apply inserted migrations by hand, rewrite ledger to the new sequence |
 
-### 3. Don't try to out-rebase the maintainers
+### 3. `/Applications` is `sunlnk` — never `rm -rf` the installed bundle
+
+`/Applications` carries the `sunlnk` flag, so the app bundle **directory** cannot be
+unlinked even by its owner. `rm -rf "/Applications/T3 Code (Alpha).app"` therefore
+deletes every file *inside* the bundle and then fails on the directory itself with
+`Permission denied`. Under `set -e` that aborts the script **before** the copy step,
+leaving a gutted, unlaunchable app (hit 2026-09-13 on the work Mac, mid-absorption).
+
+Install by clearing the contents and populating the directory in place:
+
+```sh
+find "/Applications/$APP.app" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+ditto "$STAGED/$APP.app" "/Applications/$APP.app"
+```
+
+`update.sh --install` does this; any ad-hoc remote/self-install script must too.
+
+### 4. Don't try to out-rebase the maintainers
 
 Tempting idea: merge upstream `main` into the stack daily yourself instead of waiting
 for the official rebase. Measured reality (2026-08-28): **one day** of main drift = 30
