@@ -87,7 +87,7 @@ because migration 50 derives each PR's host by URL parsing. In that case migrate
 the old build's logic or by hand, never by guessing. Plain guarded `ADD COLUMN` inserts
 (2026-09-13) are fully reproducible and never need to refuse.
 
-## The four hazards of rebasing against this upstream
+## The five hazards of rebasing against this upstream
 
 ### 1. Force-pushes are routine — never plain-rebase across one
 
@@ -156,7 +156,35 @@ ditto "$STAGED/$APP.app" "/Applications/$APP.app"
 
 `update.sh --install` does this; any ad-hoc remote/self-install script must too.
 
-### 4. Don't try to out-rebase the maintainers
+### 4. Dispatching the MBP self-install: two traps that look like a broken build
+
+The MBP installs itself from a script that **quits the app hosting the session that
+dispatches it**, so the script must outlive both. Two ways that has gone wrong, both of
+which present as "the new build is broken" rather than as a dispatch problem:
+
+- **`launchctl submit` implies KeepAlive.** Handing the installer to launchd
+  (`launchctl submit -l t3-mbp-install -- …`) makes launchd **re-run it every time it
+  exits**. Since the script's first action is `osascript … quit`, the app is killed a few
+  seconds after *every* launch, forever — indistinguishable from a crash-on-startup until
+  you notice the shutdown is graceful (`desktop.app` span exits `Success`,
+  `backendInstance.stop`, no error). Cure: `launchctl remove t3-mbp-install`, then
+  `pkill -f t3-mbp-install.sh`. Prefer a self-detaching script (`nohup "$0" &` guarded by
+  an env flag) over launchd; macOS has no `setsid`, so `nohup setsid …` fails with exit
+  **127** and silently installs nothing.
+- **`pgrep -f` takes an ERE, so `(Alpha)` is a capture group, not literal parentheses.**
+  `pgrep -f "T3 Code (Alpha).app/Contents/MacOS"` matches *nothing*, ever — so a
+  "wait for the app to quit" loop written that way returns instantly and the installer
+  can clear and overwrite the bundle **while the app is still running**. Escape it:
+  `pgrep -f "T3 Code \(Alpha\)\.app/Contents/MacOS"`. Verify any such guard against a
+  *running* app before trusting it — a process check that can only ever return "gone" is
+  worse than no check.
+
+Diagnostic order when the app won't stay up after an install: is the shutdown graceful
+(→ something is quitting it: this hazard) or is the backend dying (→ hazard #2, check
+`server.trace.ndjson` / `desktop.trace.ndjson` for today's entries — `server-child.log`
+is only written by the *old* pre-trace builds and is easy to misread as current).
+
+### 5. Don't try to out-rebase the maintainers
 
 Tempting idea: merge upstream `main` into the stack daily yourself instead of waiting
 for the official rebase. Measured reality (2026-08-28): **one day** of main drift = 30
