@@ -15,7 +15,9 @@
 #
 # Usage: trial-infra/update.sh [--no-build] [--install] [--no-push] [--old-base <sha>]
 #   --no-build        fetch + rebase + pnpm install only
-#   --install         after building, copy the .app into /Applications (quit the app first)
+#   --install         after building, deploy onto THIS machine via deploy.sh --local
+#                     (deploy.sh handles quitting, the sunlnk-safe copy, relaunch
+#                     and verification; other machines: deploy.sh --remote <host>)
 #   --no-push         skip force-pushing the rebased trial branch to origin
 #   --old-base <sha>  the PR head trial currently sits on; needed when the remote
 #                     was already fetched (the default reads the tracking ref)
@@ -136,20 +138,13 @@ if [[ $DO_BUILD -eq 1 ]]; then
     else
       echo "WARNING: app-update.yml present in bundle — auto-update may be live!" >&2
     fi
-    if [[ $DO_INSTALL -eq 1 ]]; then
-      echo "== installing to /Applications (quit the app first if running)"
-      # /Applications carries the `sunlnk` flag on macOS: the bundle DIRECTORY
-      # itself cannot be unlinked, so `rm -rf` guts the bundle and then fails on
-      # the top directory ("Permission denied") — under `set -e` that aborts
-      # BEFORE the copy, leaving no installed app at all (hit 2026-09-13 on the
-      # work Mac). Clear the contents, then populate the directory in place.
-      if [[ -d "/Applications/$APP_NAME" ]]; then
-        find "/Applications/$APP_NAME" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-      fi
-      ditto "$APP_PATH" "/Applications/$APP_NAME"
-      echo "== installed: /Applications/$APP_NAME (state stays in ~/.t3)"
-    fi
     rm -rf "$EXTRACT_DIR"
+    if [[ $DO_INSTALL -eq 1 ]]; then
+      # Installing is deploy.sh's job — ONE installer, so the quit/sunlnk/verify
+      # logic cannot drift between this script and a hand-written one.
+      echo "== handing off to deploy.sh --local"
+      trial-infra/deploy.sh --local --zip "$ZIP"
+    fi
   else
     echo "WARNING: no zip artifact found under release/" >&2
   fi
