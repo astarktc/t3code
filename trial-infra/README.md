@@ -59,13 +59,47 @@ What it does, in order:
    `app-update.yml` (the updater self-disables without it), and the bundle is checked
    for its absence after the build. A fork build that silently self-updates back to an
    upstream release would be a disaster; this makes it structurally impossible.
-6. **Install** (`--install`): swaps the app bundle into `/Applications`. Quit the app
-   first. App state lives in `~/.t3/userdata/` (packaged) / `~/.t3/dev/` (dev builds)
-   and survives reinstalls.
+6. **Install** (`--install`): hands off to `deploy.sh --local`. App state lives in
+   `~/.t3/userdata/` (packaged) / `~/.t3/dev/` (dev builds) and survives reinstalls.
 
 Gotchas encoded in the script: `~/.cargo/bin` is added to PATH (a native resource
 monitor needs cargo, and non-interactive shells don't have it); commit trial-infra
 changes with `--no-verify` (the repo's pre-commit hook assumes app-code changes).
+`update.sh` **exits at a rebase conflict**, so its later steps (tripwires, backup push,
+build) must then be run by hand once the conflict is resolved.
+
+## `deploy.sh` — the ONE installer, for both Macs
+
+```
+trial-infra/deploy.sh --local  [--zip <path>] [--detach] [--force]
+trial-infra/deploy.sh --remote <ssh-host> [--zip <path>] [--force]
+```
+
+Every absorption up to 2026-09-14 hand-wrote a throwaway installer into `/tmp`, and they
+drifted from each other. Both install-step incidents on record — the `sunlnk` gutted
+bundle (09-13) and the launchd quit-loop plus a `pgrep` guard that could never match
+(09-14) — were **dispatch bugs in those throwaway scripts, not build bugs**. There is now
+one committed, tested installer; do not improvise another.
+
+It refuses to do the wrong thing rather than trusting the operator: aborts on active
+orchestration runs (`--force` to override), rejects an artifact carrying `app-update.yml`,
+refuses to overwrite a bundle it could not prove had quit, verifies the installed asar
+hash equals the artifact's, and after relaunch checks readiness, `serverVersion`, the
+migration ledger, `integrity_check`, **and that the app is still alive 20 s later** — the
+last one is what catches a KeepAlive'd dispatcher quit-looping the app. Every run tees to
+`/tmp/t3-deploy-<timestamp>.log` on the machine being installed, so evidence survives a
+closed terminal or an interrupted session.
+
+**Order matters: other machines first, the machine hosting your session LAST** — the
+install quits the app, so installing the host machine ends any session running inside it.
+
+```sh
+# from the MBP (the build machine), after update.sh has produced release/*.zip
+trial-infra/deploy.sh --remote mac-uni-auto   # work Mac: attached, full output here
+trial-infra/deploy.sh --local                 # MBP last
+#   ... or, when dispatching from a Pi thread hosted BY T3 Code itself:
+trial-infra/deploy.sh --local --detach        # survives the app going away
+```
 
 ## `fix-migration-*.sh` — the state-repair pattern
 
@@ -168,9 +202,9 @@ which present as "the new build is broken" rather than as a dispatch problem:
   seconds after *every* launch, forever — indistinguishable from a crash-on-startup until
   you notice the shutdown is graceful (`desktop.app` span exits `Success`,
   `backendInstance.stop`, no error). Cure: `launchctl remove t3-mbp-install`, then
-  `pkill -f t3-mbp-install.sh`. Prefer a self-detaching script (`nohup "$0" &` guarded by
-  an env flag) over launchd; macOS has no `setsid`, so `nohup setsid …` fails with exit
-  **127** and silently installs nothing.
+  `pkill -f deploy.sh`. Use `deploy.sh --detach` (self-detaching `nohup "$0" &` behind an
+  env guard) instead of launchd; macOS has no `setsid`, so `nohup setsid …` fails with
+  exit **127** and silently installs nothing.
 - **`pgrep -f` takes an ERE, so `(Alpha)` is a capture group, not literal parentheses.**
   `pgrep -f "T3 Code (Alpha).app/Contents/MacOS"` matches *nothing*, ever — so a
   "wait for the app to quit" loop written that way returns instantly and the installer
@@ -199,13 +233,30 @@ The economical moves are:
 
 ## After every update — verify before trusting
 
-- App launches **with a window** and About shows the new version (a no-window launch =
-  hazard #2 — check `server-child.log`, not the desktop log).
-- `curl http://127.0.0.1:3773/.well-known/t3/environment` returns the new
-  `serverVersion`.
-- Whatever your local patches touch still works.
+`deploy.sh` already asserts readiness, `serverVersion`, the asar hash, the migration
+ledger, `integrity_check` and 20 s survival — if it printed `DEPLOY OK`, those hold. What
+is left for a human:
 
-A second machine can be updated without a repo checkout: copy the built
-`release/T3-Code-<ver>-arm64.zip` over, extract with `ditto -x -k`, swap
-`/Applications/T3 Code (Alpha).app`, run the state-repair script if hazard #2 applies,
-relaunch.
+- App shows a **window** and About shows the expected version.
+- Whatever your local patches touch still works (e.g. Pi appears in the Usage dashboard).
+- Both Macs report the **same asar hash** — that is the parity check worth recording.
+
+**Where the truth is when something is wrong.** Use today's traces:
+`~/.t3/userdata/logs/server.trace.ndjson` and `desktop.trace.ndjson`. **`server-child.log`
+is NOT written by trace-era builds** — its newest lines are from an old incident, and on
+2026-09-14 they showed a real 2026-08-28 migration crash-loop that looked exactly like a
+current one. Check file mtimes before believing any log.
+
+Triage order for "the app won't stay up":
+
+1. Is the shutdown **graceful** (`desktop.app` span exits `Success`, `backendInstance.stop`)?
+   Then something is *telling* it to quit — hazard #4, not the build. Look for a dispatcher:
+   `launchctl list | grep -i t3` and `pgrep -fl deploy.sh`.
+2. Is the **backend dying** (readiness never reaches 200, migration errors in today's
+   traces)? Then hazard #2 — reconcile the ledger with the matching `fix-migration-*.sh`.
+3. Is the bundle **incomplete** (app won't launch at all)? Then hazard #3 bit a hand-rolled
+   installer; just re-run `deploy.sh`, which is idempotent.
+
+A second machine never needs a repo checkout or a hand-written script:
+`trial-infra/deploy.sh --remote <ssh-host>` copies the artifact and itself, then runs the
+identical verified path there.
