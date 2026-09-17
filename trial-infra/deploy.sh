@@ -118,12 +118,23 @@ fi
 # Always leave a durable record: this script quits the app that may be hosting the
 # session watching it, and an interrupted terminal must not take the evidence with
 # it. (2026-09-14: a --local run's output was lost to an aborted tool call.)
+# Ignore SIGPIPE before forking tee: if the terminal/ssh channel watching this
+# run goes away (2026-09-17: an aborted --remote tool call), BSD tee must NOT
+# die on its stdout write — with SIGPIPE ignored it warns and keeps writing the
+# log file, and the script keeps going to a real verdict.
+trap '' PIPE
 if [[ "${T3_DEPLOY_LOGGING:-}" != "1" ]]; then
   export T3_DEPLOY_LOGGING=1
   RUN_LOG="${T3_DEPLOY_LOG:-/tmp/t3-deploy-$(date +%Y%m%d-%H%M%S).log}"
   echo "== logging to $RUN_LOG"
   exec > >(tee -a "$RUN_LOG") 2>&1
 fi
+
+# Every probe is bounded. A backend that has bound the port but is still
+# starting can accept a connection and never answer it; an unbounded curl then
+# blocks the readiness loop forever (2026-09-17: 6 min hang on the work Mac,
+# only unstuck by killing the curl by hand).
+probe() { curl -s --connect-timeout 2 --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/.well-known/t3/environment" || true; }
 
 resolve_zip
 
@@ -200,8 +211,8 @@ log "installed ✓ (asar $INSTALLED)"
 # 6. Relaunch and verify for real.
 open -a "$TARGET" || die "open failed"
 CODE=000
-for _ in $(seq 1 90); do
-  CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/.well-known/t3/environment" || true)
+for _ in $(seq 1 45); do   # ≤ 45 × (5 s probe + 2 s) ≈ 5 min worst case
+  CODE=$(probe)
   [[ "$CODE" == "200" ]] && break
   sleep 2
 done
@@ -215,7 +226,7 @@ if [[ "$CODE" != "200" ]]; then
   exit 1
 fi
 log "readiness 200 ✓"
-curl -s "http://127.0.0.1:$PORT/.well-known/t3/environment" \
+curl -s --connect-timeout 2 --max-time 5 "http://127.0.0.1:$PORT/.well-known/t3/environment" \
   | python3 -c 'import sys,json; d=json.load(sys.stdin); print("== serverVersion:", d["serverVersion"], "| protocol:", d.get("orchestrationProtocolVersion"))' 2>/dev/null
 
 # 7. Post-install state checks.
@@ -227,7 +238,7 @@ fi
 # 8. A graceful quit shortly after this point means something is TELLING the app
 #    to quit (a KeepAlive'd dispatcher), not that the build is broken.
 sleep 20
-if app_running && [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/.well-known/t3/environment" || true)" == "200" ]]; then
+if app_running && [[ "$(probe)" == "200" ]]; then
   log "stable 20s after launch ✓"
   log "DEPLOY OK on $(hostname -s) — asar $INSTALLED"
 else
