@@ -114,6 +114,7 @@ to run while the app is open, and back up the DB first. Run with the app **quit*
 | `fix-migration-consolidation-20260909.sh` | consolidation | folded 44–52 into one id 50, inserted 6 new at 44–49 |
 | `fix-migration-renumber-20260910.sh` | renumber | inserted 50 `ProjectionThreadPullRequests`, `OrchestrationV2` 50 → 51 |
 | `fix-migration-renumber-20260913.sh` | renumber | inserted 51 `ProjectionThreadMessageContext`, `OrchestrationV2` 51 → 52 |
+| `fix-migration-renumber-20260917.sh` | renumber | inserted 52 `ProjectionThreadTitleState`, `OrchestrationV2` 52 → 53 |
 
 A repair script may legitimately **refuse** when an inserted migration backfills data by
 logic not reproducible in SQL — the 2026-09-10 one refuses if legacy linked-PR rows exist,
@@ -260,3 +261,15 @@ Triage order for "the app won't stay up":
 A second machine never needs a repo checkout or a hand-written script:
 `trial-infra/deploy.sh --remote <ssh-host>` copies the artifact and itself, then runs the
 identical verified path there.
+
+**Hazard #5 — an unbounded probe can hang a verified deploy.** `deploy.sh`'s readiness loop
+once used a bare `curl` with no `--max-time`. A backend that has bound port 3773 but is still
+starting accepts the TCP connection and never answers, and the loop blocks on that one probe
+forever — the install itself was already complete and healthy (2026-09-17, work Mac: six
+minutes stuck on a single `curl`, unstuck only by killing it by hand, after which the script
+carried on to its verdict). Every probe is now bounded (`--connect-timeout 2 --max-time 5`;
+the loop's worst case is ~5 min before an explicit failure) and `SIGPIPE` is ignored before the
+`tee` fork, so a terminal or ssh channel that goes away cannot kill the log writer either.
+If a deploy "sits there", look at the process tree (`pgrep -fl deploy.sh`, then the children)
+before assuming the install failed: a lone stuck `curl` with `installed ✓` already in the log
+is this hazard, not hazard #2.
