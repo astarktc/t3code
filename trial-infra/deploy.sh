@@ -30,7 +30,10 @@ PORT=3773
 DB="$HOME/.t3/userdata/state.sqlite"
 # pgrep -f takes an ERE: the bundle's literal parentheses MUST be escaped or the
 # pattern matches nothing and every "is it running?" check silently answers "no".
-APP_PGREP='T3 Code \(Alpha\)\.app/Contents/MacOS'
+# The main Electron process is INVISIBLE to pgrep on macOS (both -f and -x; only
+# the Helper children match), so any pgrep-based guard is vacuous for the app
+# proper (hazard #6, 2026-09-17). Match the executable path from `ps -o comm`.
+APP_EXE="/Applications/$APP_NAME/Contents/MacOS/$APP_PROC"
 
 MODE="" HOST="" ZIP="" DETACH=0 FORCE=0 EXPECT_ASAR=""
 while [[ $# -gt 0 ]]; do
@@ -50,7 +53,8 @@ done
 log() { printf '== %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-app_running() { pgrep -f "$APP_PGREP" >/dev/null 2>&1; }
+app_pids() { ps -axo pid=,comm= | awk -v p="$APP_EXE" 'index($0, p) { print $1 }'; }
+app_running() { [[ -n "$(app_pids)" ]]; }
 
 asar_hash() { shasum -a 256 "$1" | cut -c1-16; }
 
@@ -97,8 +101,11 @@ if [[ "$MODE" == remote ]]; then
 fi
 
 # ------------------------------------------------------------------- local ----
-# Self-detach (macOS has no setsid). Guarded by an env flag so the re-exec runs
-# the real body exactly once.
+# Self-detach. macOS has no setsid(1), but perl's POSIX::setsid works: the re-exec
+# gets its OWN session + process group. nohup alone is NOT enough when dispatched
+# from a Pi bash tool inside T3 Code — the tool kills its process group when the
+# app quits (step 4) aborts the call, taking a merely-nohup'd child with it
+# (hazard #6, 2026-09-17). Guarded by an env flag so the body runs exactly once.
 if [[ $DETACH -eq 1 && "${T3_DEPLOY_DETACHED:-}" != "1" ]]; then
   LOG="/tmp/t3-deploy-$(date +%Y%m%d-%H%M%S).log"
   resolve_zip
@@ -107,7 +114,8 @@ if [[ $DETACH -eq 1 && "${T3_DEPLOY_DETACHED:-}" != "1" ]]; then
   if [[ -n "$EXPECT_ASAR" ]]; then
     RE_ARGS[${#RE_ARGS[@]}]="--expect-asar"; RE_ARGS[${#RE_ARGS[@]}]="$EXPECT_ASAR"
   fi
-  T3_DEPLOY_LOG="$LOG" T3_DEPLOY_DETACHED=1 nohup "${BASH_SOURCE[0]}" "${RE_ARGS[@]}" >/dev/null 2>&1 &
+  T3_DEPLOY_LOG="$LOG" T3_DEPLOY_DETACHED=1 nohup perl -MPOSIX -e 'POSIX::setsid() or die "setsid: $!"; exec @ARGV or die "exec: $!"' -- \
+    "${BASH_SOURCE[0]}" "${RE_ARGS[@]}" >/dev/null 2>&1 &
   disown 2>/dev/null || true
   echo "dispatched detached (pid $!)"
   echo "log: $LOG"
@@ -179,14 +187,14 @@ if [[ -f "$DB" ]]; then
   log "          matching trial-infra/fix-migration-*.sh NOW — before first launch."
 fi
 
-# 4. Quit the app and PROVE it quit (escaped pgrep — see APP_PGREP).
+# 4. Quit the app and PROVE it quit (ps-based — see APP_EXE).
 if app_running; then
   log "quitting $APP_PROC"
   osascript -e "tell application \"$APP_PROC\" to quit" >/dev/null 2>&1 || true
   for _ in $(seq 1 45); do app_running || break; sleep 1; done
   if app_running; then
     log "still running after 45s — sending TERM"
-    pkill -f "$APP_PGREP" || true
+    app_pids | xargs kill 2>/dev/null || true
     for _ in $(seq 1 15); do app_running || break; sleep 1; done
   fi
   app_running && die "app would not quit; refusing to overwrite a live bundle"
