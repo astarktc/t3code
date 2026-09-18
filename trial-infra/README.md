@@ -99,7 +99,12 @@ trial-infra/deploy.sh --remote mac-uni-auto   # work Mac: attached, full output 
 trial-infra/deploy.sh --local                 # MBP last
 #   ... or, when dispatching from a Pi thread hosted BY T3 Code itself:
 trial-infra/deploy.sh --local --detach        # survives the app going away
+#   ... and when a migration repair must run between quit and install:
+trial-infra/install-from-inside.sh --repair trial-infra/fix-migration-<date>.sh --expect-asar <hash16>
 ```
+
+`install-from-inside.sh` is the committed form of the "quit → repair → deploy" wrapper the
+MBP needs after a renumber hazard; it runs in a new session like `--detach` (hazard #6).
 
 ## `fix-migration-*.sh` — the state-repair pattern
 
@@ -123,7 +128,7 @@ because migration 50 derives each PR's host by URL parsing. In that case migrate
 the old build's logic or by hand, never by guessing. Plain guarded `ADD COLUMN` inserts
 (2026-09-13) are fully reproducible and never need to refuse.
 
-## The five hazards of rebasing against this upstream
+## The six hazards of rebasing against this upstream
 
 ### 1. Force-pushes are routine — never plain-rebase across one
 
@@ -204,16 +209,19 @@ which present as "the new build is broken" rather than as a dispatch problem:
   seconds after _every_ launch, forever — indistinguishable from a crash-on-startup until
   you notice the shutdown is graceful (`desktop.app` span exits `Success`,
   `backendInstance.stop`, no error). Cure: `launchctl remove t3-mbp-install`, then
-  `pkill -f deploy.sh`. Use `deploy.sh --detach` (self-detaching `nohup "$0" &` behind an
-  env guard) instead of launchd; macOS has no `setsid`, so `nohup setsid …` fails with
-  exit **127** and silently installs nothing.
-- **`pgrep -f` takes an ERE, so `(Alpha)` is a capture group, not literal parentheses.**
-  `pgrep -f "T3 Code (Alpha).app/Contents/MacOS"` matches _nothing_, ever — so a
-  "wait for the app to quit" loop written that way returns instantly and the installer
-  can clear and overwrite the bundle **while the app is still running**. Escape it:
-  `pgrep -f "T3 Code \(Alpha\)\.app/Contents/MacOS"`. Verify any such guard against a
-  _running_ app before trusting it — a process check that can only ever return "gone" is
-  worse than no check.
+  `pkill -f deploy.sh`. Use `deploy.sh --detach` (re-exec in a new session behind an env
+  guard — see hazard #6 for why plain `nohup` is not enough) instead of launchd; macOS has
+  no `setsid(1)`, so `nohup setsid …` fails with exit **127** and silently installs nothing.
+- **`pgrep` cannot see the main app process at all.** First found as an ERE trap
+  (`(Alpha)` is a capture group, so the unescaped pattern matches nothing), but the escaped
+  form is vacuous too: on macOS `pgrep -f`/`pgrep -x` list only the `Helper` children of
+  the Electron app, never the main `T3 Code (Alpha)` process or its server child (verified
+  2026-09-17 against a running app: `pgrep -f 'T3 Code \(Alpha\)\.app/Contents/MacOS'` →
+  nothing, `ps -axo pid,comm` → both). A "wait for the app to quit" loop written with
+  `pgrep` returns instantly and the installer can clear the bundle **while the app is
+  running**. `deploy.sh` now matches the executable path in `ps -o comm` (`app_pids`). Verify
+  any process guard against a _running_ app before trusting it — a check that can only
+  ever return "gone" is worse than no check.
 
 Diagnostic order when the app won't stay up after an install: is the shutdown graceful
 (→ something is quitting it: this hazard) or is the backend dying (→ hazard #2, check
@@ -274,3 +282,14 @@ the loop's worst case is ~5 min before an explicit failure) and `SIGPIPE` is ign
 If a deploy "sits there", look at the process tree (`pgrep -fl deploy.sh`, then the children)
 before assuming the install failed: a lone stuck `curl` with `installed ✓` already in the log
 is this hazard, not hazard #2.
+
+**Hazard #6 — `nohup` does not survive the app quitting when dispatched from inside it.** A
+Pi bash tool inside a T3 Code thread runs its command in a process group; when step 4 quits
+the app, the thread dies, the tool call aborts, and the tool kills that whole group —
+`nohup` only shields SIGHUP. The 2026-09-17 MBP install died two lines into its log this way
+(after `osascript … quit`, before the repair ran), and the vacuous `pgrep` loop (hazard #4)
+had let it reach that point without waiting. Both `deploy.sh --detach` and
+`install-from-inside.sh` now re-exec through `perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV'`,
+which gives the installer its own session and process group (`ps -o sess,pgid` to verify).
+Symptom to recognise: the log stops mid-procedure with no error, the app is back up on the
+OLD build, and no `deploy.sh` process exists.
