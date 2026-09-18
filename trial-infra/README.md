@@ -41,7 +41,7 @@ trial-infra/update.sh [--no-build] [--install] [--no-push] [--old-base <sha>]
 What it does, in order:
 
 1. **Guard**: refuses to run on a dirty worktree.
-2. **Fetch + rebase**: captures the remote PR head *before* fetching, then rebases with
+2. **Fetch + rebase**: captures the remote PR head _before_ fetching, then rebases with
    `git rebase --onto <new-head> <old-head> trial`. This replays **exactly the local
    patch commits** and is **force-push-safe** — a plain `git rebase` after an upstream
    force-push would try to replay hundreds of old-SHA stack commits and drown you in
@@ -108,13 +108,14 @@ self-guarding: they no-op unless the DB ledger matches the exact pre-fix state, 
 to run while the app is open, and back up the DB first. Run with the app **quit** and
 **before** the new build's first launch, on every machine.
 
-| Script | Shape | What upstream did |
-| --- | --- | --- |
-| `fix-migration-renumber-20260828.sh` | renumber | inserted 3 migrations before applied ones (41–49 → 44–52) |
-| `fix-migration-consolidation-20260909.sh` | consolidation | folded 44–52 into one id 50, inserted 6 new at 44–49 |
-| `fix-migration-renumber-20260910.sh` | renumber | inserted 50 `ProjectionThreadPullRequests`, `OrchestrationV2` 50 → 51 |
-| `fix-migration-renumber-20260913.sh` | renumber | inserted 51 `ProjectionThreadMessageContext`, `OrchestrationV2` 51 → 52 |
-| `fix-migration-renumber-20260917.sh` | renumber | inserted 52 `ProjectionThreadTitleState`, `OrchestrationV2` 52 → 53 |
+| Script                                    | Shape         | What upstream did                                                                                                                                  |
+| ----------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fix-migration-renumber-20260828.sh`      | renumber      | inserted 3 migrations before applied ones (41–49 → 44–52)                                                                                          |
+| `fix-migration-consolidation-20260909.sh` | consolidation | folded 44–52 into one id 50, inserted 6 new at 44–49                                                                                               |
+| `fix-migration-renumber-20260910.sh`      | renumber      | inserted 50 `ProjectionThreadPullRequests`, `OrchestrationV2` 50 → 51                                                                              |
+| `fix-migration-renumber-20260913.sh`      | renumber      | inserted 51 `ProjectionThreadMessageContext`, `OrchestrationV2` 51 → 52                                                                            |
+| `fix-migration-renumber-20260917.sh`      | renumber      | inserted 52 `ProjectionThreadTitleState`, `OrchestrationV2` 52 → 53                                                                                |
+| `fix-migration-renumber-20260918.sh`      | renumber      | inserted 53 `PullRequestFilesViewed`, `OrchestrationV2` 53 → 54 (quit-guard applies to the live DB only — dry-runs on a copy work with the app up) |
 
 A repair script may legitimately **refuse** when an inserted migration backfills data by
 logic not reproducible in SQL — the 2026-09-10 one refuses if legacy linked-PR rows exist,
@@ -134,12 +135,12 @@ automatically via `--onto`; if you ever rebase by hand, always use
 After any force-push, **diff your local patches against the new head before assuming
 you still need them** — upstream absorbs fixes fast. At the 2026-08-28 force-push, 2 of
 our 3 patches had been superseded (one adopted upstream after our bug report, one
-mooted by a refactor). Local patch count should *decay* over time if you report bugs
+mooted by a refactor). Local patch count should _decay_ over time if you report bugs
 upstream instead of hoarding fixes.
 
 ### 2. Force-pushes can invalidate persistent state, not just code
 
-The nastiest failure mode found: upstream inserted 3 new DB migrations *before*
+The nastiest failure mode found: upstream inserted 3 new DB migrations _before_
 already-applied ones, renumbering the tail of the sequence (41–49 became 44–52). The
 migrator tracks progress by numeric id, so a database created under the old numbering
 re-runs "new" migrations that already ran → `table ... already exists` → **the backend
@@ -161,24 +162,24 @@ Repair pattern (see the fix script for a worked example):
 
 `update.sh` step 3 now detects the condition at rebase time, before you build.
 
-The hazard has a **second shape** (2026-09-09): upstream *consolidated* nine already-applied
+The hazard has a **second shape** (2026-09-09): upstream _consolidated_ nine already-applied
 migrations (44–52) into one id (50) and inserted six new ones at 44–49. Effect's Migrator
 runs only ids **greater than the ledger's max**, so a DB at 52 sees a code max of 50 and runs
-*nothing* — no crash, the new columns/indexes just never land and queries fail later. Same
+_nothing_ — no crash, the new columns/indexes just never land and queries fail later. Same
 repair pattern (verify the folded bodies are identical, apply the inserted migrations by
 hand, rewrite the ledger); worked example: `fix-migration-consolidation-20260909.sh`.
 `update.sh` warns about removed/consolidated migration names alongside the renumber check.
 
-| Ledger vs code | Symptom | Fix |
-| --- | --- | --- |
-| ledger max **below** the renumbered ids | migrations re-run → `table already exists` → crash-loop, no window | renumber ledger, apply inserted ALTERs |
-| ledger max **above** the code max (consolidation) | silent: nothing runs, schema drifts | apply inserted migrations by hand, rewrite ledger to the new sequence |
+| Ledger vs code                                    | Symptom                                                            | Fix                                                                   |
+| ------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| ledger max **below** the renumbered ids           | migrations re-run → `table already exists` → crash-loop, no window | renumber ledger, apply inserted ALTERs                                |
+| ledger max **above** the code max (consolidation) | silent: nothing runs, schema drifts                                | apply inserted migrations by hand, rewrite ledger to the new sequence |
 
 ### 3. `/Applications` is `sunlnk` — never `rm -rf` the installed bundle
 
 `/Applications` carries the `sunlnk` flag, so the app bundle **directory** cannot be
 unlinked even by its owner. `rm -rf "/Applications/T3 Code (Alpha).app"` therefore
-deletes every file *inside* the bundle and then fails on the directory itself with
+deletes every file _inside_ the bundle and then fails on the directory itself with
 `Permission denied`. Under `set -e` that aborts the script **before** the copy step,
 leaving a gutted, unlaunchable app (hit 2026-09-13 on the work Mac, mid-absorption).
 
@@ -200,24 +201,24 @@ which present as "the new build is broken" rather than as a dispatch problem:
 - **`launchctl submit` implies KeepAlive.** Handing the installer to launchd
   (`launchctl submit -l t3-mbp-install -- …`) makes launchd **re-run it every time it
   exits**. Since the script's first action is `osascript … quit`, the app is killed a few
-  seconds after *every* launch, forever — indistinguishable from a crash-on-startup until
+  seconds after _every_ launch, forever — indistinguishable from a crash-on-startup until
   you notice the shutdown is graceful (`desktop.app` span exits `Success`,
   `backendInstance.stop`, no error). Cure: `launchctl remove t3-mbp-install`, then
   `pkill -f deploy.sh`. Use `deploy.sh --detach` (self-detaching `nohup "$0" &` behind an
   env guard) instead of launchd; macOS has no `setsid`, so `nohup setsid …` fails with
   exit **127** and silently installs nothing.
 - **`pgrep -f` takes an ERE, so `(Alpha)` is a capture group, not literal parentheses.**
-  `pgrep -f "T3 Code (Alpha).app/Contents/MacOS"` matches *nothing*, ever — so a
+  `pgrep -f "T3 Code (Alpha).app/Contents/MacOS"` matches _nothing_, ever — so a
   "wait for the app to quit" loop written that way returns instantly and the installer
   can clear and overwrite the bundle **while the app is still running**. Escape it:
   `pgrep -f "T3 Code \(Alpha\)\.app/Contents/MacOS"`. Verify any such guard against a
-  *running* app before trusting it — a process check that can only ever return "gone" is
+  _running_ app before trusting it — a process check that can only ever return "gone" is
   worse than no check.
 
 Diagnostic order when the app won't stay up after an install: is the shutdown graceful
 (→ something is quitting it: this hazard) or is the backend dying (→ hazard #2, check
 `server.trace.ndjson` / `desktop.trace.ndjson` for today's entries — `server-child.log`
-is only written by the *old* pre-trace builds and is easy to misread as current).
+is only written by the _old_ pre-trace builds and is easy to misread as current).
 
 ### 5. Don't try to out-rebase the maintainers
 
@@ -251,7 +252,7 @@ current one. Check file mtimes before believing any log.
 Triage order for "the app won't stay up":
 
 1. Is the shutdown **graceful** (`desktop.app` span exits `Success`, `backendInstance.stop`)?
-   Then something is *telling* it to quit — hazard #4, not the build. Look for a dispatcher:
+   Then something is _telling_ it to quit — hazard #4, not the build. Look for a dispatcher:
    `launchctl list | grep -i t3` and `pgrep -fl deploy.sh`.
 2. Is the **backend dying** (readiness never reaches 200, migration errors in today's
    traces)? Then hazard #2 — reconcile the ledger with the matching `fix-migration-*.sh`.
