@@ -1,9 +1,24 @@
 # trial-infra — maintaining a personal fork of an unmerged t3code PR stack
 
-Tooling for running a **personal packaged build** of t3code's Pi-provider PR stack as a
-daily driver, tracking a fast-moving upstream that periodically **force-pushes**.
-Everything here was built (and battle-tested) while trialing
-[pingdotgg/t3code#7211](https://github.com/pingdotgg/t3code/pull/7211).
+Tooling for running a **personal packaged build** of t3code's Orchestrator V2 + Pi-provider
+stack as a daily driver, tracking a fast-moving upstream that periodically **force-pushes**.
+
+## Absorption checklist (every upstream move — run the scripts, never improvise)
+
+1. `trial-infra/update.sh --old-base <the sha trial actually sits on>` — force-push-safe
+   `--onto` rebase + migration tripwires + backup push + packaged build. It **exits at a
+   rebase conflict**; after resolving one, run its later steps by hand — the two tripwire
+   comparisons (step 3 below) are the ones most easily skipped, and 7 of 8 absorptions to
+   date carried a migration hazard.
+2. **Patch triage against the new base — by invariant and intent, not by conflict** (hazard #1).
+3. **Verify**: `apps/server` `tsc --noEmit` + the suites covering whatever the patches touch.
+   If a test fails in a file you just resolved, **baseline first**: `git checkout <newbase> --
+   <files>`, re-run, restore with `git checkout HEAD -- …` — upstream ships red tests.
+4. **Deploy** with `trial-infra/deploy.sh`: `--remote <host>` for other machines FIRST, `--local`
+   (`--detach` from inside a T3-hosted thread) for the session host LAST. A migration repair
+   between quit and install = `install-from-inside.sh --repair <fix script> --expect-asar <hash>`.
+5. **Record**: asar-hash parity on both Macs; prune superseded `~/.t3/userdata/state.sqlite.bak-*`
+   on both, keeping the current schema's.
 
 ## The lineage you're standing on
 
@@ -20,17 +35,12 @@ trial (this repo)                           ← the V2 head + our local patches,
                                               on every update
 ```
 
-**Lineage note (2026-09-10).** This was a three-layer stack until the maintainer
-(`juliusmarminge`) squash-merged StiensWout's Pi PR into the V2 branch. One tracking layer
-is gone, and with it the per-absorption Pi-patch triage. The remaining layer, #2829 → `main`,
-is this whole pipeline's exit condition. Squash merges mean the old PR head is **not** an
-ancestor of the new base — always `--onto` with an explicitly recorded old head.
+The one remaining layer, #2829 → `main`, is this whole pipeline's exit condition. Squash
+merges mean the last PR head is **not** an ancestor of the new base — always `--onto` with an
+explicitly recorded old head. Plan for force-pushes as the normal case, not the exception.
 
-Remotes as configured here: `origin` = the personal GitHub fork (backup of `trial`),
-`upstream` = pingdotgg/t3code (both the canonical repo **and** the base-branch source),
-`stienswout` = historical, no longer tracked.
-**Two cascading rebase layers land on you at once** — plan for force-pushes as the
-normal case, not the exception.
+Remotes: `origin` = the personal GitHub fork (backup of `trial`), `upstream` = pingdotgg/t3code
+(both the canonical repo **and** the base-branch source).
 
 ## `update.sh` — the rebase→rebuild pipeline
 
@@ -75,11 +85,9 @@ trial-infra/deploy.sh --local  [--zip <path>] [--detach] [--force]
 trial-infra/deploy.sh --remote <ssh-host> [--zip <path>] [--force]
 ```
 
-Every absorption up to 2026-09-14 hand-wrote a throwaway installer into `/tmp`, and they
-drifted from each other. Both install-step incidents on record — the `sunlnk` gutted
-bundle (09-13) and the launchd quit-loop plus a `pgrep` guard that could never match
-(09-14) — were **dispatch bugs in those throwaway scripts, not build bugs**. There is now
-one committed, tested installer; do not improvise another.
+Every install-step incident on record was a **dispatch bug in a hand-written throwaway
+installer, not a build bug** (hazards #3, #4, #6). This is the one committed, tested installer;
+do not improvise another.
 
 It refuses to do the wrong thing rather than trusting the operator: aborts on active
 orchestration runs (`--force` to override), rejects an artifact carrying `app-update.yml`,
@@ -138,10 +146,23 @@ automatically via `--onto`; if you ever rebase by hand, always use
 `git rebase --onto <new-remote-head> <old-remote-head> trial`.
 
 After any force-push, **diff your local patches against the new head before assuming
-you still need them** — upstream absorbs fixes fast. At the 2026-08-28 force-push, 2 of
-our 3 patches had been superseded (one adopted upstream after our bug report, one
-mooted by a refactor). Local patch count should _decay_ over time if you report bugs
-upstream instead of hoarding fixes.
+you still need them** — upstream absorbs fixes fast. Local patch count should _decay_ over
+time if you report bugs upstream instead of hoarding fixes (every patch carries a drop-watch
+item in Plane).
+
+**Patch triage is about invariants and intent, not conflicts** — both directions have bitten:
+
+- **A clean replay is NOT evidence a patch is still complete.** Upstream can add a new site
+  for the same concept (a third `settledDeliveryCount` cap, once) and git replays the patch
+  with zero conflicts while it silently stops covering its own invariant. **Grep the concept
+  across the whole new base, not the hunk.**
+- **A conflict does NOT mean the patch's intent is obsolete — often only its SHAPE is.** When
+  upstream rewrites the file the patch touches (the usage transcript-dir resolver became a
+  per-provider-instance loop), re-express the patch inside upstream's new structure; replaying
+  the old structure reverts upstream's work. Expect the Pi-usage patch to conflict at every
+  absorption.
+
+Method note: `quartermaster/research/infra-reliability_fork-maintenance-invariants.md`.
 
 ### 2. Force-pushes can invalidate persistent state, not just code
 
@@ -150,8 +171,8 @@ already-applied ones, renumbering the tail of the sequence (41–49 became 44–
 migrator tracks progress by numeric id, so a database created under the old numbering
 re-runs "new" migrations that already ran → `table ... already exists` → **the backend
 crash-loops and the app launches with no window and no visible error** (the desktop
-shell waits forever on backend readiness; the real error is only in
-`~/.t3/userdata/logs/server-child.log`).
+shell waits forever on backend readiness; the real error is only in today's
+`~/.t3/userdata/logs/server.trace.ndjson`).
 
 Repair pattern (see the fix script for a worked example):
 
@@ -195,7 +216,7 @@ find "/Applications/$APP.app" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 ditto "$STAGED/$APP.app" "/Applications/$APP.app"
 ```
 
-`update.sh --install` does this; any ad-hoc remote/self-install script must too.
+`deploy.sh` does this on both machines; it is the only installer.
 
 ### 4. Dispatching the MBP self-install: two traps that look like a broken build
 
@@ -212,34 +233,49 @@ which present as "the new build is broken" rather than as a dispatch problem:
   `pkill -f deploy.sh`. Use `deploy.sh --detach` (re-exec in a new session behind an env
   guard — see hazard #6 for why plain `nohup` is not enough) instead of launchd; macOS has
   no `setsid(1)`, so `nohup setsid …` fails with exit **127** and silently installs nothing.
-- **`pgrep` cannot see the main app process at all.** First found as an ERE trap
-  (`(Alpha)` is a capture group, so the unescaped pattern matches nothing), but the escaped
-  form is vacuous too: on macOS `pgrep -f`/`pgrep -x` list only the `Helper` children of
-  the Electron app, never the main `T3 Code (Alpha)` process or its server child (verified
-  2026-09-17 against a running app: `pgrep -f 'T3 Code \(Alpha\)\.app/Contents/MacOS'` →
-  nothing, `ps -axo pid,comm` → both). A "wait for the app to quit" loop written with
-  `pgrep` returns instantly and the installer can clear the bundle **while the app is
-  running**. `deploy.sh` now matches the executable path in `ps -o comm` (`app_pids`). Verify
-  any process guard against a _running_ app before trusting it — a check that can only
-  ever return "gone" is worse than no check.
+- **`pgrep` cannot see the main app process at all.** On macOS `pgrep -f`/`pgrep -x` list
+  only the `Helper` children of the Electron app, never the main `T3 Code (Alpha)` process or
+  its server child (`ps -axo pid,comm` shows both). A "wait for the app to quit" loop written
+  with `pgrep` returns instantly and the installer can clear the bundle **while the app is
+  running**. `deploy.sh` matches the executable path in `ps -o comm` (`app_pids`). Verify any
+  process guard against a _running_ app before trusting it — a check that can only ever
+  return "gone" is worse than no check.
 
 Diagnostic order when the app won't stay up after an install: is the shutdown graceful
 (→ something is quitting it: this hazard) or is the backend dying (→ hazard #2, check
 `server.trace.ndjson` / `desktop.trace.ndjson` for today's entries — `server-child.log`
 is only written by the _old_ pre-trace builds and is easy to misread as current).
 
-### 5. Don't try to out-rebase the maintainers
+### 5. An unbounded readiness probe can hang a verified deploy
 
-Tempting idea: merge upstream `main` into the stack daily yourself instead of waiting
-for the official rebase. Measured reality (2026-08-28): **one day** of main drift = 30
-conflicted files against the stack (which diverges from main across ~900 files). The
-maintainer's own rebases are visibly manual reconciliation work, your resolutions would
-duplicate his, and the next official force-push **discards everything you resolved**.
-The economical moves are:
+A backend that has bound port 3773 but is still starting accepts the TCP connection and
+never answers; a bare `curl` blocks on that one probe forever while the install itself is
+already complete and healthy. Every probe in `deploy.sh` is bounded (`--connect-timeout 2
+--max-time 5`; the loop's worst case is ~5 min before an explicit failure) and `SIGPIPE` is
+ignored before the `tee` fork, so a terminal or ssh channel that goes away cannot kill the
+log writer either. If a deploy "sits there", look at the process tree (`pgrep -fl deploy.sh`,
+then the children) before assuming the install failed: a lone stuck `curl` with `installed ✓`
+already in the log is this hazard, not hazard #2.
 
-- ride the official force-pushes (this repo's default), and
-- **cherry-pick individual main commits** when something specific matters
-  (`git cherry-pick <sha>` onto `trial`; drop it at whatever rebase absorbs it).
+### 6. `nohup` does not survive the app quitting when dispatched from inside it
+
+A Pi bash tool inside a T3 Code thread runs its command in a process group; when the
+installer quits the app, the thread dies, the tool call aborts, and the tool kills that whole
+group — `nohup` only shields SIGHUP. Both `deploy.sh --detach` and `install-from-inside.sh`
+re-exec through `perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV'`, which gives the installer its
+own session and process group (`ps -o sess,pgid` to verify). Symptom to recognise: the log
+stops mid-procedure with no error, the app is back up on the OLD build, and no `deploy.sh`
+process exists.
+
+## Doctrine: ride the official force-pushes, don't out-rebase the maintainers
+
+Merging upstream `main` into the stack yourself between official rebases does not pay:
+**one day** of main drift measured 30 conflicted files against a stack that diverges from
+main across ~900 files, the maintainer's own rebases are manual reconciliation work your
+resolutions would duplicate, and the next official force-push **discards everything you
+resolved**. The economical moves are riding the official force-pushes (this repo's default)
+and **cherry-picking individual main commits** when something specific matters
+(`git cherry-pick <sha>` onto `trial`; drop it at whatever rebase absorbs it).
 
 ## After every update — verify before trusting
 
@@ -266,30 +302,8 @@ Triage order for "the app won't stay up":
    traces)? Then hazard #2 — reconcile the ledger with the matching `fix-migration-*.sh`.
 3. Is the bundle **incomplete** (app won't launch at all)? Then hazard #3 bit a hand-rolled
    installer; just re-run `deploy.sh`, which is idempotent.
+4. Did a deploy merely **stall** with `installed ✓` already logged? Hazard #5.
 
 A second machine never needs a repo checkout or a hand-written script:
 `trial-infra/deploy.sh --remote <ssh-host>` copies the artifact and itself, then runs the
 identical verified path there.
-
-**Hazard #5 — an unbounded probe can hang a verified deploy.** `deploy.sh`'s readiness loop
-once used a bare `curl` with no `--max-time`. A backend that has bound port 3773 but is still
-starting accepts the TCP connection and never answers, and the loop blocks on that one probe
-forever — the install itself was already complete and healthy (2026-09-17, work Mac: six
-minutes stuck on a single `curl`, unstuck only by killing it by hand, after which the script
-carried on to its verdict). Every probe is now bounded (`--connect-timeout 2 --max-time 5`;
-the loop's worst case is ~5 min before an explicit failure) and `SIGPIPE` is ignored before the
-`tee` fork, so a terminal or ssh channel that goes away cannot kill the log writer either.
-If a deploy "sits there", look at the process tree (`pgrep -fl deploy.sh`, then the children)
-before assuming the install failed: a lone stuck `curl` with `installed ✓` already in the log
-is this hazard, not hazard #2.
-
-**Hazard #6 — `nohup` does not survive the app quitting when dispatched from inside it.** A
-Pi bash tool inside a T3 Code thread runs its command in a process group; when step 4 quits
-the app, the thread dies, the tool call aborts, and the tool kills that whole group —
-`nohup` only shields SIGHUP. The 2026-09-17 MBP install died two lines into its log this way
-(after `osascript … quit`, before the repair ran), and the vacuous `pgrep` loop (hazard #4)
-had let it reach that point without waiting. Both `deploy.sh --detach` and
-`install-from-inside.sh` now re-exec through `perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV'`,
-which gives the installer its own session and process group (`ps -o sess,pgid` to verify).
-Symptom to recognise: the log stops mid-procedure with no error, the app is back up on the
-OLD build, and no `deploy.sh` process exists.
