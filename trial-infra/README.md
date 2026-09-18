@@ -136,7 +136,7 @@ because migration 50 derives each PR's host by URL parsing. In that case migrate
 the old build's logic or by hand, never by guessing. Plain guarded `ADD COLUMN` inserts
 (2026-09-13) are fully reproducible and never need to refuse.
 
-## The six hazards of rebasing against this upstream
+## The seven hazards of rebasing against this upstream
 
 ### 1. Force-pushes are routine — never plain-rebase across one
 
@@ -266,6 +266,20 @@ re-exec through `perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV'`, which gives the
 own session and process group (`ps -o sess,pgid` to verify). Symptom to recognise: the log
 stops mid-procedure with no error, the app is back up on the OLD build, and no `deploy.sh`
 process exists.
+
+### 7. `open -a` can exit 0 and launch nothing
+
+Observed 2026-09-18 from a `--detach` install on the MBP: the bundle was installed and
+verified, `open -a` returned 0, and the desktop trace shows no launch for 37 minutes until
+the operator opened the app by hand. The exit code is not evidence — a process appearing
+is. `deploy.sh` now polls `app_running` for 10 s after `open`, retries once, and fails with
+an "app did not launch" message that names the install as complete (so it is not confused
+with hazard #2's no-window crash-loop). The readiness wait is a 300 s wall-clock deadline:
+its predecessor counted 45 iterations assuming each probe spent its `--max-time`, but a
+connection-refused probe returns instantly, so with no app running it gave up after 91 s.
+Whether the cause is the `setsid` session losing LaunchServices, or `open` racing the
+instance still tearing down (the stop span and the `open` land within the same seconds), is
+unproven; the `--remote` (attached, non-`setsid`) path relaunched fine the same day.
 
 ## Doctrine: ride the official force-pushes, don't out-rebase the maintainers
 

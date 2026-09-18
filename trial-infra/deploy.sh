@@ -217,15 +217,33 @@ INSTALLED=$(asar_hash "$TARGET/Contents/Resources/app.asar")
 log "installed ✓ (asar $INSTALLED)"
 
 # 6. Relaunch and verify for real.
-open -a "$TARGET" || die "open failed"
+#    Hazard #7 (2026-09-18): `open -a` can exit 0 and launch NOTHING (observed from a
+#    --detach session right after the quit: no launch span for 37 min until the operator
+#    opened the app by hand). The exit code is not evidence; a process appearing is.
+#    Poll for it, retry `open` once, and fail with a message distinct from the
+#    migration/no-window hazard.
+launch_and_wait() {
+  open -a "$TARGET" || return 1
+  for _ in $(seq 1 10); do app_running && return 0; sleep 1; done
+  return 1
+}
+if ! launch_and_wait; then
+  log "open -a started no process within 10s — retrying open once"
+  launch_and_wait || die "app did not launch after two 'open -a' attempts (install is complete, asar $INSTALLED) — open it by hand and re-verify: curl http://127.0.0.1:$PORT/.well-known/t3/environment"
+fi
+log "app process up ✓"
+#    Wall-clock budget, not iteration count: a connection-refused probe returns
+#    instantly, so a 45-iteration loop burned out in 91 s on 2026-09-18.
 CODE=000
-for _ in $(seq 1 45); do   # ≤ 45 × (5 s probe + 2 s) ≈ 5 min worst case
+READY_DEADLINE=$((SECONDS + 300))
+while (( SECONDS < READY_DEADLINE )); do
   CODE=$(probe)
   [[ "$CODE" == "200" ]] && break
+  app_running || { log "app process disappeared while waiting for readiness"; break; }
   sleep 2
 done
 if [[ "$CODE" != "200" ]]; then
-  echo "ERROR: backend never became ready (readiness=$CODE)" >&2
+  echo "ERROR: backend never became ready (readiness=$CODE) within 300s" >&2
   echo "       This is the no-window hazard. Look at TODAY's traces:" >&2
   echo "       ~/.t3/userdata/logs/server.trace.ndjson and desktop.trace.ndjson" >&2
   echo "       (server-child.log is NOT written by trace-era builds — its newest" >&2
