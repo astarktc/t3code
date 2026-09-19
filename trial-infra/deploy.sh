@@ -217,13 +217,23 @@ INSTALLED=$(asar_hash "$TARGET/Contents/Resources/app.asar")
 log "installed ✓ (asar $INSTALLED)"
 
 # 6. Relaunch and verify for real.
-#    Hazard #7 (2026-09-18): `open -a` can exit 0 and launch NOTHING (observed from a
-#    --detach session right after the quit: no launch span for 37 min until the operator
-#    opened the app by hand). The exit code is not evidence; a process appearing is.
-#    Poll for it, retry `open` once, and fail with a message distinct from the
-#    migration/no-window hazard.
+#    Hazard #7 (2026-09-18, cause proven 2026-09-19): `open -a` passes the caller's
+#    ENVIRONMENT to the launched app (man open: "just as if you had launched the
+#    application directly through its full path"). A Pi thread hosted by T3 Code runs
+#    with ELECTRON_RUN_AS_NODE=1 (T3 spawns Pi under its bundled Electron-as-node), so a
+#    --detach install dispatched from inside T3 relaunched the app as a bare Node
+#    process with no script: it exited in ~30 ms with no desktop.startup span, and
+#    `open` still returned 0. Scrub every ELECTRON_*/T3_* variable before `open`.
+#    The exit code is not evidence; a process appearing AND staying is. Poll for it,
+#    retry `open` once, and fail with a message distinct from the migration/no-window
+#    hazard.
 launch_and_wait() {
-  open -a "$TARGET" || return 1
+  local v; local -a scrub=() names=()
+  for v in $(env | grep -oE '^(ELECTRON_[A-Z0-9_]*|T3_[A-Z0-9_]*)='); do
+    scrub+=(-u "${v%=}"); names+=("${v%=}")
+  done
+  [[ ${#names[@]} -gt 0 ]] && log "scrubbing inherited launch env (hazard #7): ${names[*]}"
+  env "${scrub[@]}" open -a "$TARGET" || return 1
   for _ in $(seq 1 10); do app_running && return 0; sleep 1; done
   return 1
 }
