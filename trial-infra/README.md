@@ -267,19 +267,26 @@ own session and process group (`ps -o sess,pgid` to verify). Symptom to recognis
 stops mid-procedure with no error, the app is back up on the OLD build, and no `deploy.sh`
 process exists.
 
-### 7. `open -a` can exit 0 and launch nothing
+### 7. `open -a` inherits the caller's environment — from inside T3, that relaunches the app as bare Node
 
-Observed 2026-09-18 from a `--detach` install on the MBP: the bundle was installed and
-verified, `open -a` returned 0, and the desktop trace shows no launch for 37 minutes until
-the operator opened the app by hand. The exit code is not evidence — a process appearing
-is. `deploy.sh` now polls `app_running` for 10 s after `open`, retries once, and fails with
-an "app did not launch" message that names the install as complete (so it is not confused
-with hazard #2's no-window crash-loop). The readiness wait is a 300 s wall-clock deadline:
-its predecessor counted 45 iterations assuming each probe spent its `--max-time`, but a
-connection-refused probe returns instantly, so with no app running it gave up after 91 s.
-Whether the cause is the `setsid` session losing LaunchServices, or `open` racing the
-instance still tearing down (the stop span and the `open` land within the same seconds), is
-unproven; the `--remote` (attached, non-`setsid`) path relaunched fine the same day.
+`open` passes the caller's environment to the launched app (`man open`: "just as if you had
+launched the application directly through its full path"). A Pi thread hosted by T3 Code
+runs with `ELECTRON_RUN_AS_NODE=1` (T3 spawns Pi under its bundled Electron-as-node), so a
+`--detach` install dispatched from inside T3 relaunched T3 Code as a Node process with no
+script: it exited ~30 ms after launch with no `desktop.startup` span, `open` still returned 0,
+and the only trace was Electron's `codesign_util.cc task_name_for_pid` line in the unified
+log (the ELECTRON_RUN_AS_NODE signature check — absent from every healthy launch). The
+2026-09-18 incident ("`open -a` returned 0, nothing launched for 37 min") was the same
+mechanism; the 1 s poll never caught the 30 ms process. `--remote` (fresh ssh env) and hand
+launches never carry the variable, which is why only `--detach` ever failed.
+
+`deploy.sh` scrubs every `ELECTRON_*`/`T3_*` variable before `open` (logs which ones), then
+still treats the exit code as no evidence: it polls `app_running` for 10 s, retries `open`
+once, and fails with an "app did not launch" message that names the install as complete (so
+it is not confused with hazard #2's no-window crash-loop). The readiness wait is a 300 s
+wall-clock deadline (a connection-refused probe returns instantly, so an iteration count
+burned out in 91 s). General form of the gotcha: **any agent running inside T3 that launches
+an Electron app via `open` inherits `ELECTRON_RUN_AS_NODE`** — scrub it.
 
 ## Doctrine: ride the official force-pushes, don't out-rebase the maintainers
 
