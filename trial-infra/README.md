@@ -13,7 +13,7 @@ stack as a daily driver, tracking a fast-moving upstream that periodically **for
 2. **Patch triage against the new base — by invariant and intent, not by conflict** (hazard #1).
 3. **Verify**: `apps/server` `tsc --noEmit` + the suites covering whatever the patches touch.
    If a test fails in a file you just resolved, **baseline first**: `git checkout <newbase> --
-   <files>`, re-run, restore with `git checkout HEAD -- …` — upstream ships red tests.
+<files>`, re-run, restore with `git checkout HEAD -- …` — upstream ships red tests.
 4. **Deploy** with `trial-infra/deploy.sh`: `--remote <host>` for other machines FIRST, `--local`
    (`--detach` from inside a T3-hosted thread) for the session host LAST. A migration repair
    between quit and install = `install-from-inside.sh --repair <fix script> --expect-asar <hash>`.
@@ -306,6 +306,10 @@ is left for a human:
 
 - App shows a **window** and About shows the expected version.
 - Whatever your local patches touch still works (e.g. Pi appears in the Usage dashboard).
+  Patch invariants to grep on the new base, not the hunk: Pi row in `UsageService`
+  wherever `grok` is · zero `settledDeliveryCount` cap sites in trial · `PiAdapterV2`:
+  `switch_session` requested with `PI_SESSION_LIFECYCLE_TIMEOUT_MS` and `registerThread`
+  sends `new_session` before `get_state` when `sessionMayBeAttached` (#12929).
 - Both Macs report the **same asar hash** — that is the parity check worth recording.
 
 **Where the truth is when something is wrong.** Use today's traces:
