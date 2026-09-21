@@ -523,6 +523,17 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       let baselineThinking: string | null = null;
       /** Context window of the model Pi currently runs, from get_state and set_model. */
       let contextWindow: number | null = null;
+      /** `provider/id` of the model `contextWindow` describes, so capacity is only answered for that selection. */
+      let contextWindowModel: string | null = null;
+      const rememberModelContextWindow = (model: unknown) => {
+        const window = nonNegativeInteger(model, "contextWindow");
+        if (window === undefined) return;
+        contextWindow = window;
+        const provider = recordString(model, "provider");
+        const modelId = recordString(model, "id");
+        contextWindowModel =
+          provider === undefined || modelId === undefined ? null : `${provider}/${modelId}`;
+      };
       /**
        * Set once this process has been asked to switch or fork sessions. A
        * caller that then asks for a thread without a native ref wants a fresh
@@ -2034,8 +2045,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           baselineThinking = null;
         }
         const stateData = yield* request({ type: "get_state" });
-        contextWindow =
-          nonNegativeInteger(recordField(stateData, "model"), "contextWindow") ?? contextWindow;
+        rememberModelContextWindow(recordField(stateData, "model"));
         // Each baseline is captured independently, and only while nothing has
         // been applied yet, so a `get_state` that arrives after our own
         // selection cannot record that selection as Pi's default.
@@ -2113,7 +2123,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           // captured baseline, otherwise Pi stays on the last model applied.
           if (appliedModel !== null && baselineModel !== null) {
             const restoredModel = yield* request({ type: "set_model", ...baselineModel });
-            contextWindow = nonNegativeInteger(restoredModel, "contextWindow") ?? contextWindow;
+            rememberModelContextWindow(restoredModel);
             appliedModel = null;
             const updatedAt = yield* DateTime.now;
             sessionEntity = { ...sessionEntity, model: PI_INHERIT_MODEL_SLUG, updatedAt };
@@ -2147,7 +2157,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             provider: parsed.provider,
             modelId: parsed.modelId,
           });
-          contextWindow = nonNegativeInteger(selectedModel, "contextWindow") ?? contextWindow;
+          rememberModelContextWindow(selectedModel);
           appliedModel = modelSelection.model;
           const updatedAt = yield* DateTime.now;
           sessionEntity = { ...sessionEntity, model: modelSelection.model, updatedAt };
@@ -2212,6 +2222,21 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           return sessionEntity;
         },
         events: Stream.fromQueue(events),
+        // Capacity for a selection this process has already seen from Pi. Without
+        // it the orchestrator budgets handoffs against a 128k default, which on a
+        // long thread with unattributable usage telemetry is a zero budget (#12931).
+        getModelContextWindow: (selection) => {
+          if (contextWindow === null || contextWindow === 0 || contextWindowModel === null) {
+            return undefined;
+          }
+          const wanted =
+            selection.model === PI_INHERIT_MODEL_SLUG
+              ? baselineModel === null
+                ? null
+                : `${baselineModel.provider}/${baselineModel.modelId}`
+              : selection.model;
+          return wanted === contextWindowModel ? contextWindow : undefined;
+        },
         ensureThread: (threadInput) =>
           registerThread(threadInput).pipe(
             Effect.mapError(

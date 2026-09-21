@@ -610,6 +610,42 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  // #12931: the orchestrator budgets handoffs against a 128k default unless the
+  // adapter reports capacity; Pi reports it on get_state/set_model.
+  it.effect("reports the context window of the model Pi runs, for that selection only", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      assert.isUndefined(runtime.getModelContextWindow?.(modelSelection("default")));
+      fake.queueState({
+        model: { provider: "anthropic", id: "claude-big", contextWindow: 1_000_000 },
+        thinkingLevel: "medium",
+        isStreaming: false,
+        isCompacting: false,
+        autoCompactionEnabled: true,
+        sessionFile: FAKE_SESSION_FILE,
+        sessionId: "abc",
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      assert.equal(runtime.getModelContextWindow?.(modelSelection("default")), 1_000_000);
+      assert.equal(
+        runtime.getModelContextWindow?.(modelSelection("anthropic/claude-big")),
+        1_000_000,
+      );
+      assert.isUndefined(runtime.getModelContextWindow?.(modelSelection("anthropic/claude-small")));
+
+      yield* startTurn(runtime, providerThread, "anthropic/claude-small");
+      yield* fake.takeRequest("set_model");
+      // The fake's set_model ack carries no model object, so the known window
+      // still belongs to claude-big and must not be reported for claude-small.
+      assert.isUndefined(runtime.getModelContextWindow?.(modelSelection("anthropic/claude-small")));
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("adopts the run's provider thread identity instead of minting a second row", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

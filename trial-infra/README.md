@@ -309,7 +309,8 @@ is left for a human:
   Patch invariants to grep on the new base, not the hunk: Pi row in `UsageService`
   wherever `grok` is · zero `settledDeliveryCount` cap sites in trial · `PiAdapterV2`:
   `switch_session` requested with `PI_SESSION_LIFECYCLE_TIMEOUT_MS` and `registerThread`
-  sends `new_session` before `get_state` when `sessionMayBeAttached` (#12931).
+  sends `new_session` before `get_state` when `sessionMayBeAttached`, and the runtime exposes
+  `getModelContextWindow` from `rememberModelContextWindow` (#12931).
 - Both Macs report the **same asar hash** — that is the parity check worth recording.
 
 **Where the truth is when something is wrong.** Use today's traces:
