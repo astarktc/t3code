@@ -80,6 +80,10 @@ interface FakePi {
   readonly queueMessages: (data: unknown) => void;
   /** Make the next `switch_session` ack report an extension veto. */
   readonly vetoNextSwitch: () => void;
+  /** Hold the next `switch_session` response until the test resolves it. */
+  readonly deferNextSwitch: () => void;
+  /** Resolve the held `switch_session` request. */
+  readonly resolveDeferredSwitch: Effect.Effect<void>;
   /** Data returned by the next `get_state` acks, consumed in order. */
   readonly queueState: (data: unknown) => void;
   /** Hold the next `get_state` response until the test resolves it. */
@@ -121,6 +125,8 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   let deferredStateRequest: PiRpcRecord | undefined;
   let failState = false;
   let vetoSwitch = false;
+  let deferSwitch = false;
+  let deferredSwitchRequest: PiRpcRecord | undefined;
   let stdinBuffer = "";
 
   const emit = (record: PiRpcRecord) =>
@@ -159,6 +165,8 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         vetoSwitch = false;
         return { ...base, data: { cancelled } };
       }
+      case "new_session":
+        return { ...base, data: { cancelled: false } };
       case "get_entries":
         return { ...base, data: entriesQueue.shift() ?? { entries: [], leafId: null } };
       case "get_messages":
@@ -189,6 +197,11 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         if (record["type"] === "get_state" && deferState) {
           deferState = false;
           deferredStateRequest = record;
+          continue;
+        }
+        if (record["type"] === "switch_session" && deferSwitch) {
+          deferSwitch = false;
+          deferredSwitchRequest = record;
           continue;
         }
         const response = respondTo(record);
@@ -257,6 +270,21 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     failNextState: () => {
       failState = true;
     },
+    deferNextSwitch: () => {
+      deferSwitch = true;
+    },
+    resolveDeferredSwitch: Effect.gen(function* () {
+      const record = deferredSwitchRequest;
+      assert.isDefined(record);
+      deferredSwitchRequest = undefined;
+      yield* emit({
+        type: "response",
+        id: record!["id"],
+        command: "switch_session",
+        success: true,
+        data: { cancelled: false },
+      });
+    }),
     allRequests: () => allRequests,
     vetoNextSwitch: () => {
       vetoSwitch = true;
@@ -499,6 +527,86 @@ describe("PiAdapterV2", () => {
       const error = yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
       assert.equal(error._tag, "ProviderAdapterResumeThreadError");
       assert.match(String(error.cause), /while a turn is active/);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  // #12929: switch_session re-runs Pi's extension lifecycle and can exceed the
+  // plain request timeout on extension-heavy projects; a resume must survive it.
+  it.effect("waits past the plain request timeout for switch_session", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      fake.deferNextSwitch();
+      const resume = yield* Effect.forkChild(runtime.resumeThread({ providerThread }));
+      yield* fake.takeRequest("switch_session");
+      yield* TestClock.adjust(Duration.seconds(20));
+      // Still pending: the plain 15 s request timeout did not fire.
+      assert.isUndefined(resume.pollUnsafe());
+      yield* fake.resolveDeferredSwitch;
+      const resumed = yield* Fiber.join(resume);
+      assert.equal(resumed.nativeThreadRef?.nativeId, FAKE_SESSION_FILE);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  // #12929: after a failed resume the orchestrator drops the native ref to ask
+  // for a fresh session. Pi may still be attached to the session the resume
+  // targeted, so the adapter must start a new one rather than adopt get_state.
+  it.effect("starts a new session when a fresh thread follows a failed resume", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      assert.isFalse(fake.allRequests().some((request) => request["type"] === "new_session"));
+
+      fake.vetoNextSwitch();
+      const error = yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterResumeThreadError");
+
+      const freshFile = "/fake/.pi/agent/sessions/--workspace--/0002_fresh.jsonl";
+      fake.queueState({
+        model: null,
+        thinkingLevel: "medium",
+        isStreaming: false,
+        isCompacting: false,
+        autoCompactionEnabled: true,
+        sessionFile: freshFile,
+        sessionId: "fresh",
+      });
+      const replacement = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+        providerSessionId: SESSION_ID,
+        existingProviderThread: { ...providerThread, nativeThreadRef: null },
+      });
+      const types = fake.allRequests().map((request) => request["type"]);
+      const newSessionAt = types.lastIndexOf("new_session");
+      assert.notEqual(newSessionAt, -1);
+      assert.isAbove(types.lastIndexOf("get_state"), newSessionAt);
+      assert.equal(replacement.id, providerThread.id);
+      assert.equal(replacement.nativeThreadRef?.nativeId, freshFile);
+
+      // A later fresh-thread request on the now-clean process needs no second new_session.
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+        providerSessionId: SESSION_ID,
+        existingProviderThread: { ...replacement, nativeThreadRef: null },
+      });
+      assert.equal(
+        fake.allRequests().filter((request) => request["type"] === "new_session").length,
+        1,
+      );
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

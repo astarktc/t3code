@@ -130,6 +130,14 @@ const PI_INHERIT_MODEL_SLUG = "default";
 
 const STREAM_FLUSH_MS = 50;
 const PI_REQUEST_TIMEOUT_MS = 15_000;
+/**
+ * `switch_session` and `new_session` re-run Pi's extension lifecycle (MCP
+ * reconnects, LSP and status extensions). On an extension-heavy project that
+ * takes longer than a plain request, and Pi does not cancel the switch when
+ * the caller stops waiting: a timeout here leaves the process attached to the
+ * requested session while the adapter believes the resume failed. (#12929)
+ */
+const PI_SESSION_LIFECYCLE_TIMEOUT_MS = 60_000;
 const PI_SKILL_DISCOVERY_TIMEOUT_MS = 4_000;
 const PI_UNSOLICITED_ACTIVITY_ERROR =
   "Pi started agent work outside an active T3 turn. The session was stopped to prevent invisible tool execution.";
@@ -515,6 +523,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       let baselineThinking: string | null = null;
       /** Context window of the model Pi currently runs, from get_state and set_model. */
       let contextWindow: number | null = null;
+      /**
+       * Set once this process has been asked to switch or fork sessions. A
+       * caller that then asks for a thread without a native ref wants a fresh
+       * session; adopting whatever `get_state` reports would hand back the
+       * session a failed switch may still have attached (#12929).
+       */
+      let sessionMayBeAttached = false;
       // Prompt responses carry no id. Keep their session-wide send order and
       // owner so a late ack from a settled turn cannot affect the next turn.
       const pendingPromptResponses: Array<{
@@ -1967,10 +1982,14 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         }
         const existing = threadInput.existingProviderThread;
         if (existing?.nativeThreadRef?.nativeId != null) {
-          const switchData = yield* request({
-            type: "switch_session",
-            sessionPath: existing.nativeThreadRef.nativeId,
-          });
+          sessionMayBeAttached = true;
+          const switchData = yield* request(
+            {
+              type: "switch_session",
+              sessionPath: existing.nativeThreadRef.nativeId,
+            },
+            PI_SESSION_LIFECYCLE_TIMEOUT_MS,
+          );
           // A session_before_switch extension handler can veto the switch.
           // Proceeding would silently adopt whatever session is active and
           // write the wrong thread's turns into it.
@@ -1991,6 +2010,26 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           // them lets the `get_state` below re-capture this session's own
           // defaults, so the "Pi default" choice cannot replay the previous
           // session's model or thinking level.
+          baselineModel = null;
+          baselineThinking = null;
+        } else if (sessionMayBeAttached) {
+          // The orchestrator drops the native ref to request a fresh session,
+          // typically after a resume failed. `get_state` alone would adopt
+          // the session that resume attached (a timed-out switch still
+          // completes inside Pi), and the turn would then be budgeted as a
+          // handoff from the thread to itself. Start a new session first.
+          const newSessionData = yield* request(
+            { type: "new_session" },
+            PI_SESSION_LIFECYCLE_TIMEOUT_MS,
+          );
+          if (recordField(newSessionData, "cancelled") === true) {
+            return yield* protocolError("A Pi extension cancelled the new session");
+          }
+          sessionMayBeAttached = false;
+          threadState = null;
+          appliedModel = null;
+          appliedThinking = null;
+          appliedSessionName = null;
           baselineModel = null;
           baselineThinking = null;
         }
@@ -2603,6 +2642,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             if (forkEntryId === undefined) {
               return yield* protocolError("Pi rollback target has no captured session-tree entry");
             }
+            sessionMayBeAttached = true;
             const forkData = yield* request({ type: "fork", entryId: forkEntryId });
             if (recordField(forkData, "cancelled") === true) {
               return yield* protocolError("A Pi extension cancelled the session fork");
