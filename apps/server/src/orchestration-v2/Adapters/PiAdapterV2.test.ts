@@ -530,7 +530,7 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  // #12929: switch_session re-runs Pi's extension lifecycle and can exceed the
+  // #12931: switch_session re-runs Pi's extension lifecycle and can exceed the
   // plain request timeout on extension-heavy projects; a resume must survive it.
   it.effect("waits past the plain request timeout for switch_session", () =>
     Effect.gen(function* () {
@@ -553,7 +553,7 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  // #12929: after a failed resume the orchestrator drops the native ref to ask
+  // #12931: after a failed resume the orchestrator drops the native ref to ask
   // for a fresh session. Pi may still be attached to the session the resume
   // targeted, so the adapter must start a new one rather than adopt get_state.
   it.effect("starts a new session when a fresh thread follows a failed resume", () =>

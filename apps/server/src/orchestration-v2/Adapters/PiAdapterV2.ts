@@ -135,7 +135,7 @@ const PI_REQUEST_TIMEOUT_MS = 15_000;
  * reconnects, LSP and status extensions). On an extension-heavy project that
  * takes longer than a plain request, and Pi does not cancel the switch when
  * the caller stops waiting: a timeout here leaves the process attached to the
- * requested session while the adapter believes the resume failed. (#12929)
+ * requested session while the adapter believes the resume failed. (#12931)
  */
 const PI_SESSION_LIFECYCLE_TIMEOUT_MS = 60_000;
 const PI_SKILL_DISCOVERY_TIMEOUT_MS = 4_000;
@@ -527,7 +527,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
        * Set once this process has been asked to switch or fork sessions. A
        * caller that then asks for a thread without a native ref wants a fresh
        * session; adopting whatever `get_state` reports would hand back the
-       * session a failed switch may still have attached (#12929).
+       * session a failed switch may still have attached (#12931).
        */
       let sessionMayBeAttached = false;
       // Prompt responses carry no id. Keep their session-wide send order and
