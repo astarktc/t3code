@@ -301,7 +301,10 @@ pre-flight was **vacuous** (the V1 `orchestration_v2_projection_runs` table neve
 so it never counted live work) and its ledger/integrity readout was stale — absorptions
 #9–#11 recorded "ledger 54" from the dead file, correct by coincidence. Surfaced 2026-09-22
 when migration 55 ran on `statev2.sqlite` while the readout still said 54. `deploy.sh` now
-resolves `statev2.sqlite` first. The general form: **every path the installer verifies is an
+resolves `statev2.sqlite` first — which immediately exposed a second latent defect: the pre-flight's
+"a `--detach` caller expects 1" rule existed only as a comment, so the first live count (1 = the
+dispatching thread) would have killed every self-install; `--detach` now tolerates exactly one
+run. The general form: **every path the installer verifies is an
 upstream contract** — when a verify reading stops changing across deploys, suspect the
 path, not the build. Check `apps/server/src/config.ts` (`dbPath`) at each absorption.
 

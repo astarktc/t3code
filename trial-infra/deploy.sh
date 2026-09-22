@@ -156,14 +156,19 @@ if [[ -f "$DB" ]]; then
   ACTIVE=$(sqlite3 "$DB" \
     "select count(*) from orchestration_v2_projection_runs
       where status in ('running','queued','starting','preparing','waiting')" 2>/dev/null || echo 0)
-  # A Pi thread dispatching this deploy counts itself; --detach callers are told
-  # to expect 1. Anything more is somebody's real work.
-  if [[ "${ACTIVE:-0}" -gt 0 ]]; then
+  # A Pi thread dispatching this deploy counts itself: --detach (only ever used
+  # from inside the app) tolerates exactly that one run. Anything more is
+  # somebody's real work. This branch was unreachable while the guard read the
+  # frozen V1 DB (hazard #8) — it first fired on 2026-09-22.
+  ALLOWED=0; [[ $DETACH -eq 1 ]] && ALLOWED=1
+  if [[ "${ACTIVE:-0}" -gt $ALLOWED ]]; then
     if [[ $FORCE -eq 1 ]]; then
       log "PRE-FLIGHT: $ACTIVE active run(s) — proceeding (--force)"
     else
       die "$ACTIVE active orchestration run(s); finish them or pass --force"
     fi
+  elif [[ "${ACTIVE:-0}" -eq 1 ]]; then
+    log "pre-flight: 1 active run = this dispatching thread ✓"
   else
     log "pre-flight: 0 active runs ✓"
   fi
