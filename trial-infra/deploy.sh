@@ -160,7 +160,10 @@ if [[ -f "$DB" ]]; then
   # from inside the app) tolerates exactly that one run. Anything more is
   # somebody's real work. This branch was unreachable while the guard read the
   # frozen V1 DB (hazard #8) — it first fired on 2026-09-22.
-  ALLOWED=0; [[ $DETACH -eq 1 ]] && ALLOWED=1
+  # The detached body re-execs WITHOUT --detach (it carries T3_DEPLOY_DETACHED=1
+  # instead), so key the allowance on either signal — the first live run of this
+  # branch died on exactly that gap.
+  ALLOWED=0; [[ $DETACH -eq 1 || "${T3_DEPLOY_DETACHED:-}" == "1" ]] && ALLOWED=1
   if [[ "${ACTIVE:-0}" -gt $ALLOWED ]]; then
     if [[ $FORCE -eq 1 ]]; then
       log "PRE-FLIGHT: $ACTIVE active run(s) — proceeding (--force)"
