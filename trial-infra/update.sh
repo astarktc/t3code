@@ -89,7 +89,7 @@ RENUMBERED=$(join <(mig_pairs "$OLD_BASE" | sort) <(mig_pairs "$NEW_BASE" | sort
 if [[ -n "$RENUMBERED" ]]; then
   echo "== WARNING: upstream RENUMBERED existing DB migrations:"
   echo "$RENUMBERED"
-  echo "==   A ~/.t3/userdata/state.sqlite that ran the old numbering will crash-loop"
+  echo "==   A ~/.t3/userdata/statev2.sqlite that ran the old numbering will crash-loop"
   echo "==   the new build's backend (app launches with no window). Reconcile the"
   echo "==   effect_sql_migrations ledger before first launch — see the 2026-08-28"
   echo "==   instance script trial-infra/fix-migration-renumber-20260828.sh and"
