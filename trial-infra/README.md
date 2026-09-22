@@ -17,8 +17,8 @@ stack as a daily driver, tracking a fast-moving upstream that periodically **for
 4. **Deploy** with `trial-infra/deploy.sh`: `--remote <host>` for other machines FIRST, `--local`
    (`--detach` from inside a T3-hosted thread) for the session host LAST. A migration repair
    between quit and install = `install-from-inside.sh --repair <fix script> --expect-asar <hash>`.
-5. **Record**: asar-hash parity on both Macs; prune superseded `~/.t3/userdata/state.sqlite.bak-*`
-   on both, keeping the current schema's.
+5. **Record**: asar-hash parity on both Macs; prune superseded `~/.t3/userdata/statev2.sqlite.bak-*`
+   (and legacy `state.sqlite.bak-*`) on both, keeping the current schema's.
 
 ## The lineage you're standing on
 
@@ -121,6 +121,11 @@ self-guarding: they no-op unless the DB ledger matches the exact pre-fix state, 
 to run while the app is open, and back up the DB first. Run with the app **quit** and
 **before** the new build's first launch, on every machine.
 
+**The live DB is `~/.t3/userdata/statev2.sqlite`** (V2 split from V1 upstream in
+15769fa10e); `state.sqlite` is the frozen V1 file. The scripts below predate the split and
+name `state.sqlite` — they are kept as records of what ran. Any new repair script targets
+`statev2.sqlite` (hazard #8).
+
 | Script                                    | Shape         | What upstream did                                                                                                                                  |
 | ----------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `fix-migration-renumber-20260828.sh`      | renumber      | inserted 3 migrations before applied ones (41–49 → 44–52)                                                                                          |
@@ -136,7 +141,7 @@ because migration 50 derives each PR's host by URL parsing. In that case migrate
 the old build's logic or by hand, never by guessing. Plain guarded `ADD COLUMN` inserts
 (2026-09-13) are fully reproducible and never need to refuse.
 
-## The seven hazards of rebasing against this upstream
+## The eight hazards of rebasing against this upstream
 
 ### 1. Force-pushes are routine — never plain-rebase across one
 
@@ -176,7 +181,7 @@ shell waits forever on backend readiness; the real error is only in today's
 
 Repair pattern (see the fix script for a worked example):
 
-1. Quit the app; back up `state.sqlite`.
+1. Quit the app; back up `statev2.sqlite`.
 2. Verify the shifted migrations are **byte-identical** between old and new base
    (`git diff <old> <new> -- .../Migrations/<file>` per pair) — if they are, this is
    renumber-only and safe to reconcile.
@@ -288,6 +293,18 @@ wall-clock deadline (a connection-refused probe returns instantly, so an iterati
 burned out in 91 s). General form of the gotcha: **any agent running inside T3 that launches
 an Electron app via `open` inherits `ELECTRON_RUN_AS_NODE`** — scrub it.
 
+### 8. Upstream can move the DB out from under the installer's guards
+
+Upstream 15769fa10e (2026-09-14) moved the V2 orchestrator into `statev2.sqlite`, leaving
+`state.sqlite` as a frozen V1 file. `deploy.sh` kept reading `state.sqlite`: its active-run
+pre-flight was **vacuous** (the V1 `orchestration_v2_projection_runs` table never changes,
+so it never counted live work) and its ledger/integrity readout was stale — absorptions
+#9–#11 recorded "ledger 54" from the dead file, correct by coincidence. Surfaced 2026-09-22
+when migration 55 ran on `statev2.sqlite` while the readout still said 54. `deploy.sh` now
+resolves `statev2.sqlite` first. The general form: **every path the installer verifies is an
+upstream contract** — when a verify reading stops changing across deploys, suspect the
+path, not the build. Check `apps/server/src/config.ts` (`dbPath`) at each absorption.
+
 ## Doctrine: ride the official force-pushes, don't out-rebase the maintainers
 
 Merging upstream `main` into the stack yourself between official rebases does not pay:
@@ -308,8 +325,9 @@ is left for a human:
 - Whatever your local patches touch still works (e.g. Pi appears in the Usage dashboard).
   Patch invariants to grep on the new base, not the hunk: Pi row in `UsageService`
   wherever `grok` is · zero `settledDeliveryCount` cap sites in trial · `PiAdapterV2`:
-  `switch_session` requested with `PI_SESSION_LIFECYCLE_TIMEOUT_MS` and `registerThread`
-  sends `new_session` before `get_state` when `sessionMayBeAttached` (#12931).
+  resume fallback is upstream's own since #12933 (2026-09-22 drop) — `lifecycleRequest` at
+  `PI_SESSION_TIMEOUT_MS`, `needsNewSession`, `getModelContextWindow` from
+  `modelContextWindows`; nothing of ours to grep there.
 - Both Macs report the **same asar hash** — that is the parity check worth recording.
 
 **Where the truth is when something is wrong.** Use today's traces:

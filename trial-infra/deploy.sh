@@ -27,7 +27,12 @@ set -uo pipefail
 APP_NAME="T3 Code (Alpha).app"
 APP_PROC="T3 Code (Alpha)"
 PORT=3773
-DB="$HOME/.t3/userdata/state.sqlite"
+# The V2 orchestrator lives in statev2.sqlite (upstream 15769fa10e, 2026-09-14);
+# state.sqlite is the frozen V1 file. Every guard and verify below must read the
+# live one — reading V1 made the active-run pre-flight vacuous and the ledger
+# readout stale for four deploys (hazard #8, 2026-09-22).
+DB="$HOME/.t3/userdata/statev2.sqlite"
+[[ -f "$DB" ]] || DB="$HOME/.t3/userdata/state.sqlite"
 # pgrep -f takes an ERE: the bundle's literal parentheses MUST be escaped or the
 # pattern matches nothing and every "is it running?" check silently answers "no".
 # The main Electron process is INVISIBLE to pgrep on macOS (both -f and -x; only
