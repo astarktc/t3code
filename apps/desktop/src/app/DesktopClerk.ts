@@ -1,9 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off - userData must resolve synchronously before Electron is ready (the Clerk bridge registers privileged schemes).
+import * as NodeFs from "node:fs";
+
 import { createClerkBridge } from "@clerk/electron";
 import { storage } from "@clerk/electron/storage";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
@@ -83,13 +88,64 @@ function createDesktopClerkBridge(stateDir: string, isDevelopment: boolean) {
   });
 }
 
+const syncSystemErrorTag = (cause: unknown): PlatformError.SystemErrorTag => {
+  switch ((cause as NodeJS.ErrnoException | undefined)?.code) {
+    case "EEXIST":
+      return "AlreadyExists";
+    case "ENOENT":
+      return "NotFound";
+    case "EACCES":
+    case "EPERM":
+      return "PermissionDenied";
+    case "EBUSY":
+      return "Busy";
+    default:
+      return "Unknown";
+  }
+};
+
+const syncFsCall = <A>(method: string, path: string, run: () => A) =>
+  Effect.try({
+    try: run,
+    catch: (cause) =>
+      PlatformError.systemError({
+        _tag: syncSystemErrorTag(cause),
+        module: "FileSystem",
+        method,
+        pathOrDescriptor: path,
+        cause,
+      }),
+  });
+
+/**
+ * createClerkBridge calls protocol.registerSchemesAsPrivileged, which throws once Electron
+ * is ready. The Windows userData resolution touches the disk; through the async Node
+ * FileSystem it yields to the event loop and Electron emits ready first, so every Windows
+ * launch exits with DesktopClerkBridgeInitializationError. Resolve through synchronous fs.
+ */
+const preReadySyncFileSystem = FileSystem.makeNoop({
+  exists: (path) => syncFsCall("exists", path, () => NodeFs.existsSync(path)),
+  readFileString: (path) =>
+    syncFsCall("readFileString", path, () => NodeFs.readFileSync(path, "utf8")),
+  makeDirectory: (path, options) =>
+    syncFsCall("makeDirectory", path, () => {
+      NodeFs.mkdirSync(path, { recursive: options?.recursive ?? false });
+    }),
+  writeFileString: (path, data, options) =>
+    syncFsCall("writeFileString", path, () =>
+      NodeFs.writeFileSync(path, data, { flag: options?.flag ?? "w" }),
+    ),
+});
+
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const electronApp = yield* ElectronApp.ElectronApp;
 
   // The SDK bridge acquires Electron's profile-scoped single-instance lock.
-  const userDataPath = yield* DesktopUserData.resolveUserDataPath(environment);
+  const userDataPath = yield* DesktopUserData.resolveUserDataPath(environment).pipe(
+    Effect.provideService(FileSystem.FileSystem, preReadySyncFileSystem),
+  );
   yield* electronApp.setPath("userData", userDataPath);
 
   const bridge = yield* Effect.acquireRelease(
