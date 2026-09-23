@@ -12,7 +12,7 @@ on win32, so Electron emits `ready` before the Clerk bridge calls
 `registerSchemesAsPrivileged` and every Windows launch exits with
 `DesktopClerkBridgeInitializationError` (`DesktopClerk.ts` provides a synchronous
 `node:fs` FileSystem for that one call). Rebase it onto `trial` before any rebuild; drop
-it when upstream fixes the ordering.
+it when upstream fixes the ordering (#13195).
 
 Toolchain on the GPC: Node 26, pnpm 11.10.0 (npm global), Rust stable-msvc, VS 2022 Build
 Tools (VCTools workload + `VC.Runtimes.x86.x64.Spectre`), Python 3.13 (user scope). The
