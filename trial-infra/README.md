@@ -3,6 +3,9 @@
 Tooling for running a **personal packaged build** of t3code's Orchestrator V2 + Pi-provider
 stack as a daily driver, tracking a fast-moving upstream that periodically **force-pushes**.
 
+Windows remote environments (Gaming PC, Alienware — one-shot, not refreshed at absorptions):
+`trial-infra/windows/README.md`.
+
 ## Absorption checklist (every upstream move — run the scripts, never improvise)
 
 1. `trial-infra/update.sh --old-base <the sha trial actually sits on>` — force-push-safe
