@@ -11,7 +11,7 @@ Windows remote environments (Gaming PC, Alienware — one-shot, not refreshed at
 1. `trial-infra/update.sh --old-base <the sha trial actually sits on>` — force-push-safe
    `--onto` rebase + migration tripwires + backup push + packaged build. It **exits at a
    rebase conflict**; after resolving one, run its later steps by hand — the two tripwire
-   comparisons (step 3 below) are the ones most easily skipped, and 7 of 8 absorptions to
+   comparisons (step 3 below) are the ones most easily skipped, and 8 of 15 absorptions to
    date carried a migration hazard.
 2. **Patch triage against the new base — by invariant and intent, not by conflict** (hazard #1).
 3. **Verify**: `apps/server` `tsc --noEmit` + the suites covering whatever the patches touch.
@@ -143,6 +143,17 @@ logic not reproducible in SQL — the 2026-09-10 one refuses if legacy linked-PR
 because migration 50 derives each PR's host by URL parsing. In that case migrate by running
 the old build's logic or by hand, never by guessing. Plain guarded `ADD COLUMN` inserts
 (2026-09-13) are fully reproducible and never need to refuse.
+
+**Before writing a repair, check whether upstream already reconciles the shape.** Upstream's
+`apps/server/src/persistence/reconcileV2PreviewMigration.ts` runs before the migrator and
+rewrites a V2-preview ledger (`OrchestrationV2` at 53 or 54, optionally followed by
+`55 RemoveRedundantProjectionIndexes`) to main's numbering, applying the inserted migrations
+itself; any other ledger past 53 fails with `BadState`. The 2026-09-25 renumber (inserted
+`54 ProjectionThreadsAutoSettleDisabledAt`, `OrchestrationV2` 54 → 55) needed no script: both
+Macs' ledgers matched the reconciler's accepted shape exactly. Confirm that by reading each
+Mac's rows `>= 52` against the reconciler's `valid` predicate, then dry-run the new migrator on
+a `sqlite3 .backup` copy of the live DB (a throwaway `@effect/vitest` test calling
+`runMigrations()` through `NodeSqliteClient.layer({ filename })`) before deploying.
 
 ## The eight hazards of rebasing against this upstream
 
