@@ -113,8 +113,10 @@ if [[ $DO_PUSH -eq 1 ]]; then
   git push --force-with-lease origin "$BRANCH"
 fi
 
-# 4. Reinstall deps (lockfile churns upstream daily)
-pnpm install
+# 4. Reinstall deps (lockfile churns upstream daily). When upstream changes the
+#    pnpm store/layout, pnpm wants to purge node_modules and aborts without a TTY
+#    (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY) — agents run this headless.
+pnpm install --config.confirmModulesPurge=false
 
 # 5. Packaged production build, auto-update hard-disabled:
 #    - unset publish-repo envs -> electron-builder gets no publish config ->
