@@ -11,7 +11,7 @@ Windows remote environments (Gaming PC, Alienware — one-shot, not refreshed at
 1. `trial-infra/update.sh --old-base <the sha trial actually sits on>` — force-push-safe
    `--onto` rebase + migration tripwires + backup push + packaged build. It **exits at a
    rebase conflict**; after resolving one, run its later steps by hand — the two tripwire
-   comparisons (step 3 below) are the ones most easily skipped, and 8 of 15 absorptions to
+   comparisons (step 3 below) are the ones most easily skipped, and 8 of 16 absorptions to
    date carried a migration hazard.
 2. **Patch triage against the new base — by invariant and intent, not by conflict** (hazard #1).
 3. **Verify**: `apps/server` `tsc --noEmit` + the suites covering whatever the patches touch.
