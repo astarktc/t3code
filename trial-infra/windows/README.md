@@ -7,12 +7,11 @@ update is the switch to release builds when V2 + the Pi provider merge to upstre
 
 ## Build (on the Gaming PC — `C:\src\t3code`)
 
-Branch **`trial-win`** = `trial` + one Windows-only fix: `resolveUserDataPath` does async fs
-on win32, so Electron emits `ready` before the Clerk bridge calls
-`registerSchemesAsPrivileged` and every Windows launch exits with
-`DesktopClerkBridgeInitializationError` (`DesktopClerk.ts` provides a synchronous
-`node:fs` FileSystem for that one call). Rebase it onto `trial` before any rebuild; drop
-it when upstream fixes the ordering (#13195).
+Branch **`trial-win`** = `trial` + one Windows-only fix for the launch race filed as #13195
+(`DesktopClerk.ts` provides a synchronous `node:fs` FileSystem to `resolveUserDataPath`, so
+the Clerk bridge registers its scheme before Electron emits `ready`). Upstream fixed the same
+race in #13204, which is on the V2 branch, so the patch is redundant. At any rebuild, build
+from `trial` directly instead of rebasing `trial-win`.
 
 Toolchain on the GPC: Node 26, pnpm 11.10.0 (npm global), Rust stable-msvc, VS 2022 Build
 Tools (VCTools workload + `VC.Runtimes.x86.x64.Spectre`), Python 3.13 (user scope). The
