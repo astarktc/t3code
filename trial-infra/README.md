@@ -11,7 +11,7 @@ Windows remote environments (Gaming PC, Alienware — one-shot, not refreshed at
 1. `trial-infra/update.sh --old-base <the sha trial actually sits on>` — force-push-safe
    `--onto` rebase + migration tripwires + backup push + packaged build. It **exits at a
    rebase conflict**; after resolving one, run its later steps by hand — the two tripwire
-   comparisons (step 3 below) are the ones most easily skipped, and 8 of 16 absorptions to
+   comparisons (step 3 below) are the ones most easily skipped, and 8 of 17 absorptions to
    date carried a migration hazard.
 2. **Patch triage against the new base — by invariant and intent, not by conflict** (hazard #1).
 3. **Verify**: `apps/server` `tsc --noEmit` + the suites covering whatever the patches touch.
@@ -179,7 +179,13 @@ item in Plane).
   upstream rewrites the file the patch touches (the usage transcript-dir resolver became a
   per-provider-instance loop), re-express the patch inside upstream's new structure; replaying
   the old structure reverts upstream's work. Expect the Pi-usage patch to conflict at every
-  absorption.
+  absorption — and after resolving, grep for every per-provider table upstream introduced:
+  a provider missing from one falls through to another provider's default silently (the
+  streaming reader's `USAGE_FIELDS` selector would have projected oversized Pi lines with
+  Claude's field set, dropping their usage with no conflict and no type error).
+- **Drop a superseded patch before running `update.sh`**, not mid-rebase:
+  `git rebase -i <old-base> trial` with the patch set to `drop`, then
+  `diff <backup-branch> trial --stat` must list exactly that patch's files.
 
 Method note: `quartermaster/research/infra-reliability_fork-maintenance-invariants.md`.
 
