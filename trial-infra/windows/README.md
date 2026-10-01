@@ -1,29 +1,42 @@
-# trial-infra/windows — one-shot Windows remote environments
+# trial-infra/windows — Windows remote environments
 
 The Gaming PC (`ssh gpc`) and the Alienware (`ssh alien`) run a Windows build of the fork
 as **network-accessible T3 servers on :3773**, paired into the MBP app as remote
-environments. They are deployed **once** and are not refreshed at absorptions — the next
-update is the switch to release builds when V2 + the Pi provider merge to upstream main.
+environments. They are not part of the absorption pipeline (`deploy.sh` is macOS-only):
+they are rebuilt on demand with the steps below, and the planned end state is the switch to
+release builds when V2 + the Pi provider merge to upstream main.
 
 ## Build (on the Gaming PC — `C:\src\t3code`)
 
-Branch **`trial-win`** = `trial` + one Windows-only fix for the launch race filed as #13195
-(`DesktopClerk.ts` provides a synchronous `node:fs` FileSystem to `resolveUserDataPath`, so
-the Clerk bridge registers its scheme before Electron emits `ready`). Upstream fixed the same
-race in #13204, which is on the V2 branch, so the patch is redundant. At any rebuild, build
-from `trial` directly instead of rebasing `trial-win`.
+Build from `trial` (after `update.sh` has pushed it to `origin`). The Windows launch race
+(#13195) is fixed upstream by #13204; the old `trial-win` branch is obsolete.
 
 Toolchain on the GPC: Node 26, pnpm 11.10.0 (npm global), Rust stable-msvc, VS 2022 Build
 Tools (VCTools workload + `VC.Runtimes.x86.x64.Spectre`), Python 3.13 (user scope). The
 build script's preflight names anything missing.
 
 ```powershell
-cd C:\src\t3code; git fetch --depth 1 origin trial-win; git checkout -B trial-win FETCH_HEAD
+cd C:\src\t3code; git fetch --depth 1 origin trial; git checkout -B trial FETCH_HEAD
 $env:Path = "$env:LOCALAPPDATA\Programs\Python\Python313;$env:APPDATA\npm;$env:USERPROFILE\.cargo\bin;$env:Path"
-pnpm install --frozen-lockfile; pnpm dist:desktop:win:x64   # -> release\T3-Code-<ver>-x64.exe
+pnpm install --frozen-lockfile --config.confirmModulesPurge=false
+pnpm dist:desktop:win:x64   # -> release\T3-Code-<ver>-x64.exe (~8 min)
 ```
 
-## Install + launch (per machine, from the MBP)
+## Upgrade an installed host (from the MBP)
+
+1. No active runs on the host, and its migration ledger checked: `scp` its
+   `.t3/userdata/statev2.sqlite*` to the MBP, read `effect_sql_migrations`, and dry-run the
+   new build's `runMigrations()` on a `.backup` copy (`trial-infra/README.md`, migration
+   repair section). Windows hosts skip absorptions, so their ledgers lag the Macs'.
+2. Copy `T3-Code-<ver>-x64.exe` into the host's `%TEMP%` (`scp … 'alien:AppData/Local/Temp/'`;
+   the Alienware gets it via the MBP from the Gaming PC).
+3. `wps.sh <host> < install.ps1` — quits the app, backs up `statev2.sqlite`, installs
+   silently, refuses an `app-update.yml`, relaunches via the logon task, waits for readiness
+   and checks the app survives 20 s.
+4. Verify from the MBP: the health-check URL below reports the new `serverVersion`, and the
+   pulled DB shows the expected ledger and `integrity_check` ok.
+
+## First install + launch (per machine, from the MBP)
 
 `wps.sh <host> < script.ps1` runs a PowerShell script over SSH with errors rendered as
 text (raw `powershell -Command` over Windows OpenSSH hides them in CLIXML).
