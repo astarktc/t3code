@@ -1,0 +1,24 @@
+#!/bin/sh
+# Secret scan of staged changes, then upstream's Vite+ pre-commit (`vp staged`).
+#
+# Enable per clone, from the main checkout, with an ABSOLUTE path so the hook also
+# runs in the PR worktrees (a relative core.hooksPath resolves against each
+# worktree's root, where fork-infra/ does not exist):
+#   git config core.hooksPath "$PWD/fork-infra/githooks"
+# `vp config` (pnpm install's prepare script) leaves core.hooksPath alone when it is
+# already set to something other than its own dispatcher, so this survives update.sh.
+#
+# VP_GIT_HOOKS=0 skips only the upstream hook (gitleaks still runs); --no-verify skips both.
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --pre-commit --staged --redact --no-banner . || exit 1
+else
+  echo "pre-commit: gitleaks not installed, staged changes NOT scanned (brew install gitleaks)" >&2
+fi
+
+# Chain to the Vite+ dispatcher of the worktree being committed to (generated,
+# gitignored; absent until pnpm install has run there).
+upstream="$(git rev-parse --show-toplevel)/.vite-hooks/_/pre-commit"
+if [ -x "$upstream" ]; then
+  exec "$upstream" "$@"
+fi
+exit 0
