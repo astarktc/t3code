@@ -124,14 +124,15 @@ function piUsageRecord(
   const model = ownModel.length > 0 ? ownModel : state.model;
   if (model.length === 0) return null;
 
+  const outputTokens = tokenCount(usageRecord["output"]);
   const totals: UsageTokenTotals = {
     // Pi reports `input` exclusive of the cached portions.
     uncachedInputTokens: tokenCount(usageRecord["input"]),
     cachedInputTokens: tokenCount(usageRecord["cacheRead"]),
     cacheCreationTokens: tokenCount(usageRecord["cacheWrite"]),
-    outputTokens: tokenCount(usageRecord["output"]),
-    // Pi folds thinking tokens into output and does not break them out.
-    reasoningTokens: 0,
+    outputTokens,
+    // Pi's optional `reasoning` is a subset of `output`, when the model reports it.
+    reasoningTokens: Math.min(outputTokens, tokenCount(usageRecord["reasoning"])),
   };
 
   if (totalTokens(totals) === 0) return null;
@@ -150,7 +151,11 @@ function piUsageRecord(
     model,
     sessionId: state.sessionId,
     totals,
-    reportedCostUsd: typeof costTotal === "number" && Number.isFinite(costTotal) ? costTotal : null,
+    // Pi writes 0 for models without rates, so a zero cost is unknown, not free.
+    reportedCostUsd:
+      typeof costTotal === "number" && Number.isFinite(costTotal) && costTotal > 0
+        ? costTotal
+        : null,
     // Pi's reported cost already reflects any tier the model ran in.
     speed: "standard",
     // Forked/subagent session files replay parent entries verbatim; id plus

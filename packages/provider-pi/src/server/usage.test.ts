@@ -7,6 +7,7 @@ function piMessageLine(overrides: {
   messageId: string;
   model?: string | undefined;
   costTotal?: number | null;
+  reasoning?: number;
   timestamp?: string;
 }): string {
   const usage: Record<string, unknown> = {
@@ -16,6 +17,7 @@ function piMessageLine(overrides: {
     cacheWrite: 3757,
     totalTokens: 46033,
   };
+  if (overrides.reasoning !== undefined) usage["reasoning"] = overrides.reasoning;
   if (overrides.costTotal !== null) {
     usage["cost"] = {
       input: 0.00003,
@@ -110,6 +112,33 @@ describe("parsePiLine", () => {
 
     expect(record).not.toBeNull();
     expect(record?.reportedCostUsd).toBeNull();
+  });
+
+  it("a zero reported cost is unpriced, not free", () => {
+    // Pi writes a zero cost for models it has no rates for.
+    const record = parsePiLine(
+      piMessageLine({ messageId: "cc33dd44", model: "acme-local-7b", costTotal: 0 }),
+      initialPiScanState(),
+    );
+
+    expect(record).not.toBeNull();
+    expect(record?.reportedCostUsd).toBeNull();
+  });
+
+  it("counts reasoning as the subset of output it is", () => {
+    const record = parsePiLine(
+      piMessageLine({ messageId: "dd44ee55", model: "gpt-6-1-sol", reasoning: 80 }),
+      initialPiScanState(),
+    );
+
+    expect(record?.totals.outputTokens).toBe(116);
+    expect(record?.totals.reasoningTokens).toBe(80);
+    // A reasoning count above output is clamped so it never exceeds its superset.
+    const clamped = parsePiLine(
+      piMessageLine({ messageId: "ee55ff66", model: "gpt-6-1-sol", reasoning: 500 }),
+      initialPiScanState(),
+    );
+    expect(clamped?.totals.reasoningTokens).toBe(116);
   });
 
   it("gives a replayed fork copy the same dedupe key as the original", () => {
