@@ -218,6 +218,26 @@ function isRecordArray(value: unknown): value is readonly unknown[] {
 }
 
 /**
+ * Whether a parsed document is a cache this server can read: a supported
+ * version with the expected root shape. Entries are validated separately, by
+ * {@link decodeScanCache}.
+ */
+export function isSupportedScanCacheDocument(document: unknown): boolean {
+  if (typeof document !== "object" || document === null) return false;
+  const root = document as Partial<SerializedCache>;
+  const version = root.version;
+  return (
+    typeof version === "number" &&
+    version >= SPEED_COMPATIBLE_SINCE_VERSION &&
+    version <= USAGE_SCAN_CACHE_VERSION &&
+    isRecordArray(root.models) &&
+    isRecordArray(root.sessions) &&
+    typeof root.files === "object" &&
+    root.files !== null
+  );
+}
+
+/**
  * Rebuilds the cache from a parsed document.
  *
  * Anything malformed yields an empty cache rather than an error: a corrupt
@@ -230,19 +250,9 @@ export function decodeScanCache(
 ): ScanCache {
   const cache: ScanCache = new Map();
   const isValidState = makeStateValidators(formats);
-  if (typeof document !== "object" || document === null) return cache;
-
-  const root = document as Partial<SerializedCache>;
+  if (!isSupportedScanCacheDocument(document)) return cache;
+  const root = document as SerializedCache;
   const version = root.version;
-  if (
-    typeof version !== "number" ||
-    version < SPEED_COMPATIBLE_SINCE_VERSION ||
-    version > USAGE_SCAN_CACHE_VERSION
-  ) {
-    return cache;
-  }
-  if (!isRecordArray(root.models) || !isRecordArray(root.sessions)) return cache;
-  if (typeof root.files !== "object" || root.files === null) return cache;
 
   // The intern tables must be all strings: a numeric entry would pass the
   // undefined guard below, land in a record's model, and crash the aggregate

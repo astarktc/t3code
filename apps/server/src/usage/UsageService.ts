@@ -69,6 +69,7 @@ import {
 import {
   decodeScanCache,
   dedupeWithinFile,
+  isSupportedScanCacheDocument,
   PREVIOUS_SCAN_CACHE_FILE_NAMES,
   makeScanCacheWriter,
   pruneScanCache,
@@ -441,11 +442,17 @@ export const make = Effect.gen(function* () {
           Effect.catchCause(() => Effect.succeed(null)),
         );
       let document = yield* readDocument(scanCachePath);
-      for (const previousPath of previousScanCachePaths) {
-        if (document !== null) break;
-        document = yield* readDocument(previousPath);
-        // Write the migrated cache to its own file on the next scan.
-        cacheDirty = document !== null;
+      if (document === null) {
+        // The newest older file this server can read; an unusable one (a
+        // version from elsewhere, a damaged root) must not hide an older one.
+        for (const previousPath of previousScanCachePaths) {
+          const candidate = yield* readDocument(previousPath);
+          if (candidate === null || !isSupportedScanCacheDocument(candidate)) continue;
+          document = candidate;
+          // Write the migrated cache to its own file on the next scan.
+          cacheDirty = true;
+          break;
+        }
       }
       if (document === null) return;
       for (const [path, entry] of decodeScanCache(document, transcriptFormats)) {

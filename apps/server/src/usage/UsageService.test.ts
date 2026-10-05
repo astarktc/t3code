@@ -1198,6 +1198,18 @@ describe("UsageService", () => {
         yield* upgraded.awaitPersisted;
         // A v5 server sharing this state directory still finds its own cache.
         assert.strictEqual(yield* Effect.promise(() => NodeFSP.readFile(v5Path, "utf8")), v5);
+
+        // An unreadable v5 file does not hide a readable older one.
+        const legacyPath = NodePath.join(stateDir, "usage-scan-cache.json");
+        yield* Effect.promise(async () => {
+          await NodeFSP.writeFile(legacyPath, v5);
+          await NodeFSP.writeFile(v5Path, encodeUnknownJsonString({ version: 99, files: {} }));
+          await NodeFSP.rm(cachePath);
+        });
+        const legacyReader = yield* UsageService.make;
+        const fromLegacy = yield* legacyReader.readSummary(WINDOW);
+        assert.strictEqual(totalOutputTokens(fromLegacy), 30);
+        yield* legacyReader.awaitPersisted;
       }).pipe(
         Effect.provide(
           layerService({
