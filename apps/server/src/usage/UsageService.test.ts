@@ -1145,6 +1145,71 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
+  it.live("upgrades a v5 cache: keeps deleted rollouts and leaves the v5 file intact", () =>
+    Effect.gen(function* () {
+      const { home, settings } = yield* setup;
+      const sessions = NodePath.join(home, "codex", "sessions");
+      const rollout = (sessionId: string, outputTokens: number) =>
+        [
+          { type: "session_meta", payload: { id: sessionId } },
+          { type: "turn_context", payload: { model: "gpt-6-astra" } },
+          {
+            type: "event_msg",
+            timestamp: "2026-08-01T10:00:00Z",
+            payload: {
+              type: "token_count",
+              info: { last_token_usage: { input_tokens: 0, output_tokens: outputTokens } },
+            },
+          },
+        ]
+          .map((line) => encodeUnknownJsonString(line))
+          .join("\n") + "\n";
+      const deleted = NodePath.join(sessions, "deleted.jsonl");
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(sessions, { recursive: true });
+        await NodeFSP.writeFile(NodePath.join(sessions, "live.jsonl"), rollout("live", 10));
+        await NodeFSP.writeFile(deleted, rollout("deleted", 20));
+      });
+
+      yield* Effect.gen(function* () {
+        const { stateDir } = yield* ServerConfig.ServerConfig;
+        const cachePath = NodePath.join(stateDir, "usage-scan-cache-v6.json");
+        const v5Path = NodePath.join(stateDir, "usage-scan-cache-v5.json");
+        const first = yield* UsageService.make;
+        yield* first.readSummary(WINDOW);
+        yield* first.awaitPersisted;
+
+        // Leave the cache as a v5 server would have written it.
+        const v5 = yield* Effect.promise(async () => {
+          const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
+            readonly version: number;
+          };
+          const text = encodeUnknownJsonString({ ...document, version: 5 });
+          await NodeFSP.writeFile(v5Path, text);
+          await NodeFSP.rm(cachePath);
+          await NodeFSP.rm(deleted);
+          return text;
+        });
+
+        const upgraded = yield* UsageService.make;
+        const summary = yield* upgraded.readSummary(WINDOW);
+        // The deleted rollout keeps its usage from the v5 cache.
+        assert.strictEqual(totalOutputTokens(summary), 30);
+        yield* upgraded.awaitPersisted;
+        // A v5 server sharing this state directory still finds its own cache.
+        assert.strictEqual(yield* Effect.promise(() => NodeFSP.readFile(v5Path, "utf8")), v5);
+      }).pipe(
+        Effect.provide(
+          layerService({
+            prefix: "usage-service-v5-upgrade-test",
+            home,
+            settings,
+          }),
+        ),
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.live(
     "upgrades a v4 cache: reprices live Codex tiers, keeps deleted rollouts, leaves v4 intact",
     () =>
@@ -1183,7 +1248,7 @@ describe("UsageService", () => {
 
         yield* Effect.gen(function* () {
           const { stateDir } = yield* ServerConfig.ServerConfig;
-          const cachePath = NodePath.join(stateDir, "usage-scan-cache-v5.json");
+          const cachePath = NodePath.join(stateDir, "usage-scan-cache-v6.json");
           const legacyPath = NodePath.join(stateDir, "usage-scan-cache.json");
           const first = yield* UsageService.make;
           yield* first.readSummary(WINDOW);
