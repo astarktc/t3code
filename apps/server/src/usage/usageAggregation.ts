@@ -77,6 +77,7 @@ interface MutableBucket {
   fastCostUsd: number;
   ultrafastCostUsd: number;
   speedPremiumUsd: number;
+  modelPricedCostUsd: number;
   records: number;
   unpricedRecords: number;
   providerReportedRecords: number;
@@ -238,6 +239,7 @@ export class UsageAggregator {
     bucket.records += 1;
     if (priced.costSource === "unpriced") bucket.unpricedRecords += 1;
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;
+    if (priced.costSource === "modelPriced") bucket.modelPricedCostUsd += priced.costUsd;
     if (record.sessionId.length > 0) bucket.sessions.add(record.sessionId);
     return true;
   }
@@ -287,6 +289,7 @@ export class UsageAggregator {
         fastCostUsd: 0,
         ultrafastCostUsd: 0,
         speedPremiumUsd: 0,
+        modelPricedCostUsd: 0,
         records: 0,
         unpricedRecords: 0,
         providerReportedRecords: 0,
@@ -307,6 +310,7 @@ export class UsageAggregator {
       const fastCostUsd = roundUsd(bucket.fastCostUsd);
       const ultrafastCostUsd = roundUsd(bucket.ultrafastCostUsd);
       const speedPremiumUsd = roundUsd(bucket.speedPremiumUsd);
+      const modelPricedCostUsd = roundUsd(bucket.modelPricedCostUsd);
       buckets.push({
         day: day as UsageDay,
         ...(hourStart === "" ? {} : { hourStart }),
@@ -331,6 +335,7 @@ export class UsageAggregator {
         ...(ultrafastCostUsd === 0 ? {} : { ultrafastCostUsd }),
         ...(speedPremiumUsd === 0 ? {} : { speedPremiumUsd }),
         costSource: resolveCostSource(bucket),
+        ...(modelPricedCostUsd === 0 ? {} : { modelPricedCostUsd }),
         records: bucket.records,
         unpricedRecords: bucket.unpricedRecords,
         sessions: bucket.sessions.size,
@@ -354,8 +359,8 @@ export class UsageAggregator {
 }
 
 /**
- * Rounds to micro-dollars. The split and speed figures need no more precision,
- * and shorter numbers keep them cheap on the wire.
+ * Rounds to micro-dollars. The split, speed and rate-priced figures need no
+ * more precision, and shorter numbers keep them cheap on the wire.
  */
 function roundUsd(value: number): number {
   return Math.round(value * 1e6) / 1e6;

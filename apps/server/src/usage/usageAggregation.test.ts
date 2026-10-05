@@ -231,6 +231,16 @@ describe("UsageAggregator", () => {
 
     expect(result.buckets[0]?.costUsd).toBe(1.25);
     expect(result.buckets[0]?.costSource).toBe("providerReported");
+    expect(result.buckets[0]).not.toHaveProperty("modelPricedCostUsd");
+  });
+
+  it("reports how much of a mixed bucket's cost was priced from rates", () => {
+    const [bucket] = aggregate([record({ reportedCostUsd: 999 }), record(), record()]).buckets;
+
+    // Two rate-priced records at $0.004625 each beside $999 reported.
+    expect(bucket?.costSource).toBe("modelPriced");
+    expect(bucket?.costUsd).toBeCloseTo(999.00925, 9);
+    expect(bucket?.modelPricedCostUsd).toBeCloseTo(0.00925, 9);
   });
 
   it("drops records outside the window", () => {

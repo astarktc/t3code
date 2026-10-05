@@ -133,6 +133,11 @@ export const UsageBucket = Schema.Struct({
   /** What fast and ultrafast requests cost above the standard rate. Absent when zero. */
   speedPremiumUsd: Schema.optional(Schema.Number),
   costSource: UsageCostSource,
+  /**
+   * The part of `costUsd` priced from model rates rather than reported, since
+   * a `modelPriced` bucket can still be mostly reported cost. Absent when zero.
+   */
+  modelPricedCostUsd: Schema.optional(Schema.Number),
   /** Distinct assistant responses, after de-duplication. */
   records: NonNegativeInt,
   unpricedRecords: NonNegativeInt,

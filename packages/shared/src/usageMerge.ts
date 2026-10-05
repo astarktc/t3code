@@ -366,6 +366,18 @@ function bucketTokens(bucket: UsageBucket): number {
   );
 }
 
+/**
+ * The part of a bucket's cost priced from model rates. Servers that predate
+ * `modelPricedCostUsd` only label the bucket, and a `modelPriced` label covers
+ * any mix with reported cost, so their whole bucket counts as estimated.
+ * Current servers omit the field only when it rounds to zero, which for a
+ * `modelPriced` bucket means rates that price its records at nothing.
+ */
+function bucketEstimatedCostUsd(bucket: UsageBucket): number {
+  if (bucket.modelPricedCostUsd !== undefined) return bucket.modelPricedCostUsd;
+  return bucket.costSource === "modelPriced" ? bucket.costUsd : 0;
+}
+
 export function isCompatibleUsageContractVersion(version: number, expected: number): boolean {
   return version >= USAGE_MERGE_COMPATIBLE_SINCE && version <= expected;
 }
@@ -550,7 +562,7 @@ export function mergeUsage(
       const tokens = bucketTokens(bucket);
       const family = familyOf(bucket.model);
       const groupKey: UsageGroupKey = groupBy === "family" ? family : bucket.provider;
-      const estimatedCostUsd = bucket.costSource === "modelPriced" ? bucket.costUsd : 0;
+      const estimatedCostUsd = bucketEstimatedCostUsd(bucket);
 
       costUsd += bucket.costUsd;
       cacheSavingsUsd += bucket.cacheSavingsUsd;

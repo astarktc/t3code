@@ -846,6 +846,36 @@ describe("mergeUsage grouped by model family", () => {
     });
   });
 
+  it("counts only the rate-priced part of a mixed bucket as estimated", () => {
+    // $999 reported plus $1 priced from rates labels the bucket modelPriced.
+    const mixed = bucket({
+      model: "claude-opus-5-5",
+      costUsd: 1000,
+      costSource: "modelPriced",
+      modelPricedCostUsd: 1,
+    });
+    const merged = mergeUsage(
+      [environment("env-a", summary([mixed], [sources[0]!]))],
+      USAGE_CONTRACT_VERSION,
+      "family",
+    );
+
+    expect(merged.groups[0]?.estimatedCostUsd).toBe(1);
+    expect(merged.models[0]?.estimatedCostUsd).toBe(1);
+    expect(merged.daily[0]?.byGroup.get("anthropic")?.estimatedCostUsd).toBe(1);
+  });
+
+  it("counts a whole modelPriced bucket as estimated when the server predates the split", () => {
+    const legacy = bucket({ model: "claude-opus-5-5", costUsd: 1000, costSource: "modelPriced" });
+    const merged = mergeUsage(
+      [environment("env-a", summary([legacy], [sources[0]!]))],
+      USAGE_CONTRACT_VERSION,
+      "family",
+    );
+
+    expect(merged.groups[0]?.estimatedCostUsd).toBe(1000);
+  });
+
   it("keys the daily and hourly series by family", () => {
     const merged = mergeUsage(environments, USAGE_CONTRACT_VERSION, "family");
 
