@@ -47,7 +47,7 @@ export interface UsageChartWindow {
  */
 export function UsageModelDialog({
   model,
-  groupBy = "harness",
+  groupBy,
   environments,
   hiddenProviders,
   metric,
@@ -56,7 +56,7 @@ export function UsageModelDialog({
   onClose,
 }: {
   readonly model: ModelTotals;
-  readonly groupBy?: UsageGroupBy;
+  readonly groupBy: UsageGroupBy;
   readonly environments: readonly EnvironmentUsageStatus[];
   /** Providers filtered out of the page. A family row spans harnesses, so its dialog leaves them out too. */
   readonly hiddenProviders: ReadonlySet<UsageProviderKind>;
@@ -73,10 +73,10 @@ export function UsageModelDialog({
         (bucket) =>
           bucket.model === model.model &&
           !hiddenProviders.has(bucket.provider) &&
-          (byFamily || bucket.provider === model.provider),
+          (groupBy === "family" || bucket.provider === model.provider),
         groupBy,
       ),
-    [environments, hiddenProviders, model.provider, model.model, byFamily, groupBy],
+    [environments, hiddenProviders, model.provider, model.model, groupBy],
   );
   const groupKey = byFamily ? model.family : model.provider;
   const series = useMemo(
@@ -135,7 +135,7 @@ export function UsageModelDialog({
             {/* Unpriced cost is unknown, not zero, so its trend shows tokens. */}
             <UsageProviderChart
               series={series}
-              groupBy={groupBy}
+              groupBy={usage.groupBy}
               days={chartWindow.days}
               daily={usage.daily}
               hours={chartWindow.hours}

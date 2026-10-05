@@ -260,8 +260,8 @@ export function UsagePage() {
     [breakdown, merged.models, metric],
   );
   const seriesWithData = useMemo(
-    () => seriesWithUsage(merged.groups, groupBy),
-    [merged.groups, groupBy],
+    () => seriesWithUsage(merged.groups, merged.groupBy),
+    [merged.groups, merged.groupBy],
   );
   const seriesWithDataKeys = useMemo(
     () => new Set(seriesWithData.map((series) => series.key)),
@@ -851,7 +851,7 @@ export function UsagePage() {
                     <UsageProviderChart
                       series={activeSeries}
                       loadingKeys={chartLoadingKeys}
-                      groupBy={groupBy}
+                      groupBy={merged.groupBy}
                       days={days}
                       daily={merged.daily}
                       hours={hours}

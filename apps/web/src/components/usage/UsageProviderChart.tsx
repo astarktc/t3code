@@ -42,7 +42,7 @@ interface UsageProviderChartProps {
   readonly resolution: "day" | "hour";
   readonly timeZone: string;
   /** Grouped by family, values that include cost priced from model rates are marked. */
-  readonly groupBy?: UsageGroupBy;
+  readonly groupBy: UsageGroupBy;
 }
 
 /** One day's per-series values, shared by the paths and the hover readout. */
@@ -262,7 +262,7 @@ export function UsageProviderChart({
   referenceTime,
   resolution,
   timeZone,
-  groupBy = "harness",
+  groupBy,
 }: UsageProviderChartProps) {
   const periods = resolution === "hour" ? hours : days;
   const byPeriod = useMemo(

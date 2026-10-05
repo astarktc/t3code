@@ -97,6 +97,10 @@ export interface ModelTotals {
  * A model whose every record lacked rates has an unknown cost, not a zero one.
  * Clients must not present its `costUsd` as a real dollar figure.
  */
+export function isModelCostUnknown(model: ModelTotals): boolean {
+  return model.records > 0 && model.unpricedRecords >= model.records;
+}
+
 /** The smallest share of a cost priced from model rates that marks it as an estimate. */
 export const ESTIMATE_MARK_MIN_SHARE = 0.01;
 
@@ -109,10 +113,6 @@ export function estimatedCostShare(costUsd: number, estimatedCostUsd: number): n
   if (!(costUsd > 0) || !(estimatedCostUsd > 0)) return null;
   const share = Math.min(1, estimatedCostUsd / costUsd);
   return share >= ESTIMATE_MARK_MIN_SHARE ? share : null;
-}
-
-export function isModelCostUnknown(model: ModelTotals): boolean {
-  return model.records > 0 && model.unpricedRecords >= model.records;
 }
 
 export interface DailyTotals {
@@ -165,6 +165,8 @@ export interface UsageContractMismatch {
 }
 
 export interface MergedUsage {
+  /** What `groups`, `models` and the period series are keyed by. */
+  readonly groupBy: UsageGroupBy;
   readonly costUsd: number;
   readonly uncachedInputTokens: number;
   readonly cachedInputTokens: number;
@@ -385,7 +387,7 @@ export function isCompatibleUsageContractVersion(version: number, expected: numb
   return version >= USAGE_MERGE_COMPATIBLE_SINCE && version <= expected;
 }
 
-const EMPTY_MERGED: MergedUsage = {
+const EMPTY_MERGED: Omit<MergedUsage, "groupBy"> = {
   costUsd: 0,
   uncachedInputTokens: 0,
   cachedInputTokens: 0,
@@ -429,7 +431,7 @@ export function mergeUsage(
   expectedContractVersion: number,
   groupBy: UsageGroupBy = "harness",
 ): MergedUsage {
-  if (environments.length === 0) return EMPTY_MERGED;
+  if (environments.length === 0) return { ...EMPTY_MERGED, groupBy };
 
   const current: EnvironmentUsage[] = [];
   const contractMismatches: UsageContractMismatch[] = [];
@@ -718,6 +720,7 @@ export function mergeUsage(
   );
 
   return {
+    groupBy,
     costUsd,
     uncachedInputTokens,
     cachedInputTokens,

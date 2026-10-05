@@ -411,7 +411,6 @@ export function UsageRouteScreen() {
                     <GroupSection
                       merged={merged}
                       series={series}
-                      groupBy={groupBy}
                       metric={metric}
                       cursorAccessEnvironments={cursorAccessEnvironments}
                       showCursorEnvironment={selectedEnvironments.length > 1}
@@ -419,12 +418,7 @@ export function UsageRouteScreen() {
                     />
                     <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
                     <CostSection merged={merged} />
-                    <ModelsSection
-                      merged={merged}
-                      series={series}
-                      groupBy={groupBy}
-                      metric={metric}
-                    />
+                    <ModelsSection merged={merged} series={series} metric={metric} />
                   </UsageUpdating>
                 </>
               )}
@@ -666,14 +660,13 @@ function ChartCard(props: {
 function GroupSection(props: {
   readonly merged: MergedUsage;
   readonly series: readonly UsageSeries[];
-  readonly groupBy: UsageGroupBy;
   readonly metric: UsageChartMetric;
   readonly cursorAccessEnvironments: readonly EnvironmentUsageStatus[];
   readonly showCursorEnvironment: boolean;
   readonly onCursorEnabled: () => void;
 }) {
   const { merged, metric } = props;
-  const byFamily = props.groupBy === "family";
+  const byFamily = merged.groupBy === "family";
   const seriesByKey = new Map(props.series.map((entry) => [entry.key, entry]));
   if (merged.groups.length === 0 && props.cursorAccessEnvironments.length === 0) return null;
 
@@ -925,11 +918,10 @@ function MetricCell(props: {
 function ModelsSection(props: {
   readonly merged: MergedUsage;
   readonly series: readonly UsageSeries[];
-  readonly groupBy: UsageGroupBy;
   readonly metric: UsageChartMetric;
 }) {
   const { merged, metric } = props;
-  const byFamily = props.groupBy === "family";
+  const byFamily = merged.groupBy === "family";
   const colors = useProviderColors();
   const seriesByKey = new Map(props.series.map((entry) => [entry.key, entry]));
   if (merged.models.length === 0) return null;

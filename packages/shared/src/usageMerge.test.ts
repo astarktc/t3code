@@ -816,6 +816,9 @@ describe("mergeUsage grouped by model family", () => {
   it("re-keys rows by the family of each model, across harnesses", () => {
     const merged = mergeUsage(environments, USAGE_CONTRACT_VERSION, "family");
 
+    expect(merged.groupBy).toBe("family");
+    expect(mergeUsage([], USAGE_CONTRACT_VERSION, "family").groupBy).toBe("family");
+
     expect(merged.groups.map((group) => [group.key, group.costUsd, group.records])).toEqual([
       ["anthropic", 40, 5],
       ["openai", 20, 4],
