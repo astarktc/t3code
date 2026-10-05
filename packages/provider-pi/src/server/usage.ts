@@ -185,7 +185,7 @@ export const piUsageFormat: TranscriptUsageFormat<PiScanState> = {
   // (session id, model fallback), so they must reach the parser.
   mightCarryUsage: (line) =>
     line.includes('"usage"') ||
-    line.includes('"type":"session"') ||
+    /"type"\s*:\s*"session"/.test(line) ||
     line.includes('"model_change"'),
   parseLine: (line, state) => orEmpty(parsePiLine(line, state)),
   parseProjected: (projected, state) => orEmpty(parsePiRecord(projected, state)),

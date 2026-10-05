@@ -177,6 +177,19 @@ describe("readTranscriptRecords resume", () => {
     assert.strictEqual(summary?.reportedCostUsd, 0.31);
   });
 
+  it("reads the Pi session id from a session line with spaced JSON", async () => {
+    const path = NodePath.join(dir, "pi-spaced.jsonl");
+    const spacedSession =
+      '{"type": "session", "version": 3, "id": "pi-session-spaced", "timestamp": "2026-08-01T10:00:00Z"}\n';
+    await NodeFSP.writeFile(
+      path,
+      spacedSession + piModelChangeLine("claude-fable-5") + piUsageLine(1, 7),
+    );
+    const result = await readTranscriptRecords(path, TEST_FORMATS.pi);
+    assert.isNotNull(result);
+    assert.strictEqual(result.records[0]?.sessionId, "pi-session-spaced");
+  });
+
   it("parses only appended lines when resuming a grown file", async () => {
     const path = NodePath.join(dir, "claude.jsonl");
     await NodeFSP.writeFile(path, claudeLine(1, 5) + claudeLine(2, 7));
