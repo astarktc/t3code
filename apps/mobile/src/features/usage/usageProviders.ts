@@ -1,4 +1,11 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
+import type { UsageGroupBy, UsageGroupKey } from "@t3tools/shared/usageMerge";
+import {
+  MODEL_FAMILY_LABEL,
+  MODEL_FAMILY_ORDER,
+  type ModelFamily,
+} from "@t3tools/shared/usageModelFamily";
+
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 /**
@@ -41,6 +48,66 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
     // Emerald holds in both themes and stays distinct from Antigravity's lavender.
     pi: "#10b981",
   };
+}
+
+/** Driver kind `ProviderIcon` draws for each harness. */
+export const PROVIDER_ICON: Record<UsageProviderKind, string> = {
+  claude: "claudeAgent",
+  codex: "codex",
+  grok: "grok",
+  cursor: "cursor",
+  opencode: "opencode",
+  antigravity: "antigravity",
+  pi: "pi",
+};
+
+/**
+ * Family colors. Vendors behind a built-in harness keep its color, so
+ * OpenAI and xAI flip with the theme like Codex and Grok; the other hues read
+ * in both themes. Matches the web palette.
+ */
+function useFamilyColors(): Record<ModelFamily, string> {
+  const providerColors = useProviderColors();
+  const { themeAppearance: scheme } = useAppearancePreferences();
+  return {
+    anthropic: providerColors.claude,
+    openai: providerColors.codex,
+    google: "#3b82f6",
+    xai: providerColors.grok,
+    cursor: providerColors.cursor,
+    meta: "#0ea5e9",
+    moonshot: "#ec4899",
+    zai: "#a855f7",
+    deepseek: "#6366f1",
+    xiaomi: "#65a30d",
+    alibaba: "#14b8a6",
+    mistral: "#f59e0b",
+    unknown: scheme === "dark" ? "#5c5c5c" : "#b0b0b0",
+  };
+}
+
+/** One row, chart band and legend entry of the current grouping. */
+export interface UsageSeries {
+  readonly key: UsageGroupKey;
+  readonly label: string;
+  readonly color: string;
+}
+
+/** Every series of a grouping, in stack and reading order. */
+export function useUsageSeries(groupBy: UsageGroupBy): readonly UsageSeries[] {
+  const providerColors = useProviderColors();
+  const familyColors = useFamilyColors();
+  return groupBy === "family"
+    ? MODEL_FAMILY_ORDER.map((family) => ({
+        key: family,
+        label: MODEL_FAMILY_LABEL[family],
+        color: familyColors[family],
+      }))
+    : PROVIDER_ORDER.map((provider) => ({
+        key: provider,
+        label: PROVIDER_LABEL[provider],
+        color: providerColors[provider],
+      }));
 }
 
 /**

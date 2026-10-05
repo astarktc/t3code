@@ -9,7 +9,7 @@ import {
   type UsageProviderKind,
 } from "@t3tools/contracts";
 import { CircleAlertIcon, ChevronDownIcon, InfoIcon, SlidersHorizontalIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import {
   cursorKeychainAccessEnvironments,
   refreshUsageLimits,
@@ -21,11 +21,15 @@ import {
 } from "@t3tools/client-runtime/state/usage-progress";
 
 import {
+  estimatedCostShare,
   isCompatibleUsageContractVersion,
   isModelCostUnknown,
   type DailyTotals,
   type HourlyTotals,
   type MergedUsage,
+  type ModelTotals,
+  type UsageGroupBy,
+  type UsageGroupKey,
 } from "@t3tools/shared/usageMerge";
 
 import { isElectron } from "../../env";
@@ -94,7 +98,15 @@ import {
   type UsageMetric,
 } from "./usageShortcuts";
 import { useEscapeToGoBack } from "../../hooks/useNavigateBack";
-import { PROVIDER_ORDER, PROVIDER_PRESENTATION, providersWithUsage } from "./usageProviders";
+import {
+  FAMILY_PRESENTATION,
+  PROVIDER_ORDER,
+  PROVIDER_PRESENTATION,
+  seriesFor,
+  seriesWithUsage,
+  type UsageSeries,
+} from "./usageProviders";
+import { ESTIMATE_FOOTNOTE, EstimateMark } from "./UsageEstimateMark";
 import {
   readUsagePagePreferences,
   saveUsagePagePreferences,
@@ -110,6 +122,20 @@ function isUsageWindowDays(value: number): value is UsagePagePreferences["window
 }
 
 const providerLabel = (provider: UsageProviderKind) => PROVIDER_PRESENTATION[provider].label;
+
+const GROUP_BY_OPTIONS = [
+  { value: "harness", label: "Harness", title: "Group by harness" },
+  { value: "family", label: "Model family", title: "Group by model family" },
+] as const satisfies readonly { value: UsageGroupBy; label: string; title: string }[];
+
+function isUsageGroupBy(value: string | null | undefined): value is UsageGroupBy {
+  return GROUP_BY_OPTIONS.some((option) => option.value === value);
+}
+
+/** Grouped by family, one model is one row whichever harnesses ran it. */
+function modelRowKey(model: ModelTotals, groupBy: UsageGroupBy): string {
+  return groupBy === "family" ? `family:${model.model}` : `${model.provider}:${model.model}`;
+}
 
 export function UsagePage() {
   const [preferences, setPreferences] = useState(readUsagePagePreferences);
@@ -132,6 +158,8 @@ export function UsagePage() {
     ),
   }));
   const metric = preferences.metric;
+  const groupBy = preferences.groupBy ?? "harness";
+  const byFamily = groupBy === "family";
   const showingLimits = metric === "limits";
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
@@ -154,7 +182,7 @@ export function UsagePage() {
     shown,
     isPartial,
     refresh,
-  } = useUsage(window, selectedEnvironmentIds, hiddenProviders);
+  } = useUsage(window, selectedEnvironmentIds, hiddenProviders, groupBy);
   // Until a new window's first answer, the previous one stays on screen, muted.
   const merged = shown?.merged ?? answeredUsage;
   const shownWindow = shown?.window ?? window;
@@ -230,44 +258,66 @@ export function UsagePage() {
         : merged.models,
     [breakdown, merged.models, metric],
   );
-  const providersWithData = useMemo(() => providersWithUsage(merged.providers), [merged.providers]);
-  // A provider still refreshing keeps its row and line before its usage lands.
-  const activeProviders = useMemo(
-    () =>
-      PROVIDER_ORDER.filter(
-        (provider) => providersWithData.includes(provider) || loading.providers.has(provider),
-      ),
-    [loading.providers, providersWithData],
+  const seriesWithData = useMemo(
+    () => seriesWithUsage(merged.groups, groupBy),
+    [merged.groups, groupBy],
   );
-  const chartLoadingProviders = useMemo(
-    () =>
-      new Set(
-        activeProviders.filter(
-          (provider) => loading.everyProvider || loading.providers.has(provider),
-        ),
-      ),
-    [activeProviders, loading.everyProvider, loading.providers],
+  const seriesWithDataKeys = useMemo(
+    () => new Set(seriesWithData.map((series) => series.key)),
+    [seriesWithData],
+  );
+  // A loading provider can still add usage to any family, but only to its own harness.
+  const isSeriesLoading = useCallback(
+    (key: UsageGroupKey) => {
+      if (byFamily) return loading.partial;
+      const loadingKeys: ReadonlySet<UsageGroupKey> = loading.providers;
+      return loading.everyProvider || loadingKeys.has(key);
+    },
+    [byFamily, loading],
+  );
+  // A harness still refreshing keeps its row and line before its usage lands.
+  // Families appear with their usage, since a loading provider's families are unknown.
+  const activeSeries = useMemo(() => {
+    if (byFamily) return seriesWithData;
+    const loadingKeys: ReadonlySet<UsageGroupKey> = loading.providers;
+    return seriesFor("harness").filter(
+      (series) => seriesWithDataKeys.has(series.key) || loadingKeys.has(series.key),
+    );
+  }, [byFamily, loading.providers, seriesWithData, seriesWithDataKeys]);
+  const chartLoadingKeys = useMemo(
+    () => new Set(activeSeries.map((series) => series.key).filter(isSeriesLoading)),
+    [activeSeries, isSeriesLoading],
   );
   const selectedModel =
     selectedModelKey === null
       ? undefined
-      : merged.models.find((model) => `${model.provider}:${model.model}` === selectedModelKey);
+      : merged.models.find((model) => modelRowKey(model, groupBy) === selectedModelKey);
+  // Grouped by family, rows mix reported and rate-priced cost, so the latter is marked.
+  const showEstimateFootnote =
+    byFamily &&
+    merged.groups.some(
+      (group) => estimatedCostShare(group.costUsd, group.estimatedCostUsd) !== null,
+    );
   const breakdownPeak = breakdownModels.reduce(
     (peak, model) => Math.max(peak, metric === "tokens" ? model.totalTokens : model.costUsd),
     0,
   );
   const summaryRows: Array<
-    | { readonly kind: "usage"; readonly provider: UsageProviderKind }
+    | { readonly kind: "usage"; readonly series: UsageSeries }
     | { readonly kind: "enable"; readonly environment: EnvironmentUsageStatus }
-  > = activeProviders.map((provider) => ({ kind: "usage", provider }));
-  const cursorInsertAt =
-    Math.max(activeProviders.indexOf("codex"), activeProviders.indexOf("claude")) + 1;
+  > = activeSeries.map((series) => ({ kind: "usage", series }));
+  const activeKeys = activeSeries.map((series) => series.key);
+  // The prompt to read Cursor usage belongs beside the harness rows; family
+  // rows have no harness position, so it follows them.
+  const cursorInsertAt = byFamily
+    ? summaryRows.length
+    : Math.max(activeKeys.indexOf("codex"), activeKeys.indexOf("claude")) + 1;
   summaryRows.splice(
     cursorInsertAt,
     0,
     ...cursorAccessEnvironments.map((environment) => ({ kind: "enable" as const, environment })),
   );
-  const timeValueColumnWidth = `${60 / (activeProviders.length + 2)}%`;
+  const timeValueColumnWidth = `${60 / (activeSeries.length + 2)}%`;
 
   const updatePreferences = (patch: Partial<UsagePagePreferences>) => {
     const nextPreferences = { ...preferences, ...patch };
@@ -285,6 +335,9 @@ export function UsagePage() {
   const selectMetric = (nextMetric: UsageMetric) => {
     if (nextMetric === "limits") setLimitsNow(Date.now());
     updatePreferences({ metric: nextMetric });
+  };
+  const selectGroupBy = (nextGroupBy: UsageGroupBy) => {
+    updatePreferences({ groupBy: nextGroupBy });
   };
   const refreshLimits = async (automatic = false, afterPending = false) => {
     try {
@@ -416,6 +469,23 @@ export function UsagePage() {
         </span>
       ) : null}
       <div className="ms-auto hidden min-w-0 items-center justify-end gap-2 xl:flex">
+        {/* Like the period, grouping does not apply to Limits. */}
+        <ToggleGroup
+          aria-label="Group usage by"
+          variant="segmented"
+          value={[groupBy]}
+          disabled={showingLimits}
+          onValueChange={(next) => {
+            const value = next[0];
+            if (isUsageGroupBy(value)) selectGroupBy(value);
+          }}
+        >
+          {GROUP_BY_OPTIONS.map((option) => (
+            <Toggle key={option.value} value={option.value} title={option.title}>
+              {option.label}
+            </Toggle>
+          ))}
+        </ToggleGroup>
         <ToggleGroup
           aria-label="Usage metric"
           variant="segmented"
@@ -461,6 +531,32 @@ export function UsagePage() {
         </Button>
       </div>
       <div className="ms-auto flex min-w-0 items-center justify-end gap-1 xl:hidden">
+        <Select
+          value={groupBy}
+          disabled={showingLimits}
+          onValueChange={(value) => {
+            if (isUsageGroupBy(value)) selectGroupBy(value);
+          }}
+        >
+          <SelectTrigger
+            aria-label="Group usage by"
+            size="compact"
+            variant="ghost"
+            className="w-auto min-w-0"
+          >
+            {/* Alone in the compact header, the value needs the "by" to read as grouping. */}
+            <SelectValue>
+              {`By ${GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label.toLowerCase()}`}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {GROUP_BY_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.title}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
         <Select
           value={metric}
           onValueChange={(value) => {
@@ -645,71 +741,98 @@ export function UsagePage() {
                           />
                         );
                       }
-                      const provider = row.provider;
-                      const totals = merged.providers.find((entry) => entry.provider === provider);
+                      const { series } = row;
+                      const totals = merged.groups.find((entry) => entry.key === series.key);
                       const share =
                         metric === "cost" ? (totals?.costShare ?? 0) : (totals?.tokenShare ?? 0);
-                      const providerSessions = totals?.sessions ?? 0;
-                      const sessionLabel = `${formatCount(providerSessions)} ${
-                        providerSessions === 1 ? "session" : "sessions"
+                      // Family rows count responses: a session can span families.
+                      const count = byFamily ? (totals?.records ?? 0) : (totals?.sessions ?? 0);
+                      const countLabel = `${formatCount(count)} ${
+                        byFamily
+                          ? count === 1
+                            ? "response"
+                            : "responses"
+                          : count === 1
+                            ? "session"
+                            : "sessions"
                       }`;
-                      const providerLoading = isProviderLoading(provider);
-                      const awaitingData = providerLoading && !providersWithData.includes(provider);
+                      const seriesLoading = isSeriesLoading(series.key);
+                      const awaitingData = seriesLoading && !seriesWithDataKeys.has(series.key);
                       return (
-                        <div key={provider} className="flex flex-col gap-1">
+                        <div key={series.key} className="flex flex-col gap-1">
                           <div className="flex items-baseline justify-between gap-4">
                             <span className="flex min-w-0 items-center gap-2 text-sm text-foreground">
                               <span
                                 aria-hidden
                                 className="size-2 shrink-0 rounded-full"
-                                style={{
-                                  backgroundColor: PROVIDER_PRESENTATION[provider].color,
-                                }}
+                                style={{ backgroundColor: series.color }}
                               />
-                              <ProviderMark provider={provider} className="size-4" />
+                              <SeriesMark series={series} className="size-4" />
                               <span className="flex min-w-0 items-baseline gap-1.5">
-                                <span className="truncate">
-                                  {PROVIDER_PRESENTATION[provider].label}
-                                </span>
+                                <span className="truncate">{series.label}</span>
                                 <span
                                   className={cn(
                                     "shrink-0 whitespace-nowrap text-2xs text-muted-foreground tabular-nums",
-                                    figureClass(providerLoading),
+                                    figureClass(seriesLoading),
                                     awaitingData && "invisible",
                                   )}
                                 >
-                                  {sessionLabel}
+                                  {countLabel}
                                 </span>
                               </span>
                             </span>
                             <span
                               className={cn(
                                 "shrink-0 text-sm font-medium text-foreground tabular-nums",
-                                figureClass(providerLoading),
+                                figureClass(seriesLoading),
                               )}
                             >
-                              {awaitingData
-                                ? "—"
-                                : metric === "cost"
-                                  ? formatUsd(totals?.costUsd ?? 0)
-                                  : formatTokens(totals?.totalTokens ?? 0)}
+                              {awaitingData ? (
+                                "—"
+                              ) : metric === "cost" ? (
+                                <>
+                                  {byFamily ? (
+                                    <EstimateMark
+                                      costUsd={totals?.costUsd ?? 0}
+                                      estimatedCostUsd={totals?.estimatedCostUsd ?? 0}
+                                    />
+                                  ) : null}
+                                  {formatUsd(totals?.costUsd ?? 0)}
+                                </>
+                              ) : (
+                                formatTokens(totals?.totalTokens ?? 0)
+                              )}
                             </span>
                           </div>
                           {/* Kept while awaiting data so the row does not grow when it lands. */}
                           <span
                             className={cn(
                               "text-xs text-muted-foreground",
-                              figureClass(providerLoading),
+                              figureClass(seriesLoading),
                               awaitingData && "invisible",
                             )}
                           >
-                            {metric === "cost"
-                              ? `${formatPercent(share)} of cost · ${formatTokens(totals?.totalTokens ?? 0)} tokens`
-                              : `${formatPercent(share)} of tokens · ${formatUsd(totals?.costUsd ?? 0)}`}
+                            {metric === "cost" ? (
+                              `${formatPercent(share)} of cost · ${formatTokens(totals?.totalTokens ?? 0)} tokens`
+                            ) : (
+                              <>
+                                {`${formatPercent(share)} of tokens · `}
+                                {byFamily ? (
+                                  <EstimateMark
+                                    costUsd={totals?.costUsd ?? 0}
+                                    estimatedCostUsd={totals?.estimatedCostUsd ?? 0}
+                                  />
+                                ) : null}
+                                {formatUsd(totals?.costUsd ?? 0)}
+                              </>
+                            )}
                           </span>
                         </div>
                       );
                     })}
+                    {showEstimateFootnote ? (
+                      <span className="text-xs text-muted-foreground">{ESTIMATE_FOOTNOTE}</span>
+                    ) : null}
                   </div>
 
                   <div className="flex min-w-0 flex-col gap-3">
@@ -718,8 +841,9 @@ export function UsagePage() {
                       {metric === "tokens" ? "processed tokens" : "cost"}
                     </h2>
                     <UsageProviderChart
-                      providers={activeProviders}
-                      loadingProviders={chartLoadingProviders}
+                      series={activeSeries}
+                      loadingKeys={chartLoadingKeys}
+                      groupBy={groupBy}
                       days={days}
                       daily={merged.daily}
                       hours={hours}
@@ -841,13 +965,16 @@ export function UsagePage() {
                           </tr>
                         ) : (
                           breakdownModels.map((model, index) => {
-                            const key = `${model.provider}:${model.model}`;
+                            const key = modelRowKey(model, groupBy);
                             const value = metric === "tokens" ? model.totalTokens : model.costUsd;
                             const share = modelShare(
                               model,
                               metric === "tokens" ? "tokens" : "cost",
                             );
-                            const rowFigures = figureClass(isProviderLoading(model.provider));
+                            // A family row merges harnesses, so any loading provider can change it.
+                            const rowFigures = figureClass(
+                              byFamily ? loading.partial : isProviderLoading(model.provider),
+                            );
                             return (
                               <tr
                                 key={key}
@@ -862,7 +989,21 @@ export function UsagePage() {
                                     onClick={() => setSelectedModelKey(key)}
                                     className="flex items-center gap-2 text-left text-foreground outline-none after:absolute after:inset-0"
                                   >
-                                    <ProviderMark provider={model.provider} className="size-3.5" />
+                                    {byFamily ? (
+                                      // Where the model ran; the bar carries its family color.
+                                      model.providers.map((provider) => (
+                                        <ProviderMark
+                                          key={provider}
+                                          provider={provider}
+                                          className="size-3.5"
+                                        />
+                                      ))
+                                    ) : (
+                                      <ProviderMark
+                                        provider={model.provider}
+                                        className="size-3.5"
+                                      />
+                                    )}
                                     {model.model}
                                   </button>
                                   <div
@@ -877,8 +1018,9 @@ export function UsagePage() {
                                           value > 0 && breakdownPeak > 0
                                             ? `max(0.5rem, ${(value / breakdownPeak) * 100}%)`
                                             : 0,
-                                        backgroundColor:
-                                          PROVIDER_PRESENTATION[model.provider].color,
+                                        backgroundColor: byFamily
+                                          ? FAMILY_PRESENTATION[model.family].color
+                                          : PROVIDER_PRESENTATION[model.provider].color,
                                       }}
                                     />
                                   </div>
@@ -887,7 +1029,15 @@ export function UsagePage() {
                                   {isModelCostUnknown(model) ? (
                                     <span className="text-muted-foreground">Unpriced</span>
                                   ) : (
-                                    formatUsd(model.costUsd)
+                                    <>
+                                      {byFamily ? (
+                                        <EstimateMark
+                                          costUsd={model.costUsd}
+                                          estimatedCostUsd={model.estimatedCostUsd}
+                                        />
+                                      ) : null}
+                                      {formatUsd(model.costUsd)}
+                                    </>
                                   )}
                                 </td>
                                 <td className={cn("hidden py-2.5 pl-6 sm:table-cell", rowFigures)}>
@@ -906,8 +1056,8 @@ export function UsagePage() {
                     <table className="w-full table-fixed text-sm">
                       <colgroup>
                         <col className="w-2/5" />
-                        {activeProviders.map((provider) => (
-                          <col key={provider} style={{ width: timeValueColumnWidth }} />
+                        {activeSeries.map((series) => (
+                          <col key={series.key} style={{ width: timeValueColumnWidth }} />
                         ))}
                         <col style={{ width: timeValueColumnWidth }} />
                         <col style={{ width: timeValueColumnWidth }} />
@@ -915,9 +1065,9 @@ export function UsagePage() {
                       <thead>
                         <tr className="border-b border-border text-left text-xs text-muted-foreground">
                           <th className="py-2 font-normal">{shownHourly ? "Hour" : "Day"}</th>
-                          {activeProviders.map((provider) => (
-                            <th key={provider} className="py-2 text-right font-normal">
-                              {PROVIDER_PRESENTATION[provider].label}
+                          {activeSeries.map((series) => (
+                            <th key={series.key} className="py-2 text-right font-normal">
+                              {series.label}
                             </th>
                           ))}
                           <th className="py-2 text-right font-normal">Total</th>
@@ -928,7 +1078,7 @@ export function UsagePage() {
                         {breakdownPeriods.length === 0 ? (
                           <tr>
                             <td
-                              colSpan={activeProviders.length + 3}
+                              colSpan={activeSeries.length + 3}
                               className="py-6 text-center text-muted-foreground"
                             >
                               No activity in this window.
@@ -945,17 +1095,26 @@ export function UsagePage() {
                                   ? formatHourShort(period.hourStart, shownWindow.timeZone)
                                   : formatDayShort(period.day)}
                               </td>
-                              {activeProviders.map((provider) => (
-                                <td
-                                  key={provider}
-                                  className={cn(
-                                    "py-2 text-right text-muted-foreground tabular-nums",
-                                    figureClass(isProviderLoading(provider)),
-                                  )}
-                                >
-                                  {formatUsd(period.byProvider.get(provider)?.costUsd ?? 0)}
-                                </td>
-                              ))}
+                              {activeSeries.map((series) => {
+                                const cell = period.byGroup.get(series.key);
+                                return (
+                                  <td
+                                    key={series.key}
+                                    className={cn(
+                                      "py-2 text-right text-muted-foreground tabular-nums",
+                                      figureClass(isSeriesLoading(series.key)),
+                                    )}
+                                  >
+                                    {byFamily ? (
+                                      <EstimateMark
+                                        costUsd={cell?.costUsd ?? 0}
+                                        estimatedCostUsd={cell?.estimatedCostUsd ?? 0}
+                                      />
+                                    ) : null}
+                                    {formatUsd(cell?.costUsd ?? 0)}
+                                  </td>
+                                );
+                              })}
                               <td
                                 className={cn(
                                   "py-2 text-right text-foreground tabular-nums",
@@ -987,7 +1146,9 @@ export function UsagePage() {
       {selectedModel !== undefined && !showingLimits ? (
         <UsageModelDialog
           model={selectedModel}
+          groupBy={groupBy}
           environments={selectedEnvironments}
+          hiddenProviders={hiddenProviders}
           metric={metric === "tokens" ? "tokens" : "cost"}
           chartWindow={{
             days,
@@ -1161,6 +1322,24 @@ function ProviderMark({
     <ProviderInstanceIcon
       driverKind={presentation.driverKind}
       displayName={presentation.label}
+      iconClassName={className}
+    />
+  );
+}
+
+/** Brand mark for a series, or nothing for a family without one; its dot stays. */
+function SeriesMark({
+  series,
+  className,
+}: {
+  readonly series: UsageSeries;
+  readonly className: string;
+}) {
+  if (series.driverKind === undefined) return null;
+  return (
+    <ProviderInstanceIcon
+      driverKind={series.driverKind}
+      displayName={series.label}
       iconClassName={className}
     />
   );

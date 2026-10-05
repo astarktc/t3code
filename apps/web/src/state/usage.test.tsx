@@ -4,6 +4,7 @@ import {
   USAGE_CONTRACT_VERSION,
   type UsageProviderKind,
 } from "@t3tools/contracts";
+import type { UsageGroupBy } from "@t3tools/shared/usageMerge";
 import { act, useLayoutEffect } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -92,12 +93,14 @@ function Probe({
   selected,
   hidden,
   window = input,
+  groupBy,
 }: {
   selected: ReadonlySet<EnvironmentId> | null;
   hidden?: ReadonlySet<UsageProviderKind>;
   window?: typeof input;
+  groupBy?: UsageGroupBy;
 }) {
-  const usage = useUsage(window, selected, hidden);
+  const usage = useUsage(window, selected, hidden, groupBy);
   useLayoutEffect(() => {
     latest = usage;
   }, [usage]);
@@ -223,6 +226,23 @@ describe("usage environment selection", () => {
     await select("a");
     expect(latest.shown).toBeNull();
   });
+
+  it("does not keep usage merged under another grouping", async () => {
+    const selected = new Set([EnvironmentId.make("a")]);
+    await act(() => renderer?.update(<Probe selected={selected} groupBy="family" />));
+    expect(latest.shown?.merged.costUsd).toBe(10);
+
+    const nextWindow = { ...input, sinceDay: UsageDay.make("2026-08-28") };
+    testState.environments = [environment("a", null)];
+    await act(() =>
+      renderer?.update(<Probe selected={selected} groupBy="family" window={nextWindow} />),
+    );
+    expect(latest.shown?.merged.costUsd).toBe(10);
+
+    // Switching the grouping before the window answers leaves nothing to show.
+    await act(() => renderer?.update(<Probe selected={selected} window={nextWindow} />));
+    expect(latest.shown).toBeNull();
+  });
 });
 
 describe("usage provider filter", () => {
@@ -231,7 +251,7 @@ describe("usage provider filter", () => {
     await act(() => renderer?.update(<Probe selected={null} hidden={new Set(["codex"])} />));
     expect(latest.merged.costUsd).toBe(5);
     expect(latest.merged.sessions).toBe(1);
-    expect(latest.merged.providers.map((entry) => entry.provider)).toEqual(["claude"]);
+    expect(latest.merged.groups.map((entry) => entry.key)).toEqual(["claude"]);
 
     await act(() => renderer?.update(<Probe selected={null} />));
     expect(latest.merged.costUsd).toBe(15);

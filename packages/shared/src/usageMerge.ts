@@ -17,26 +17,62 @@ import {
   type UsageTokenTotals,
 } from "@t3tools/contracts";
 
+import { modelFamily, type ModelFamily } from "./usageModelFamily.ts";
+
 export interface EnvironmentUsage {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly summary: UsageSummary;
 }
 
-export interface ProviderTotals {
-  readonly provider: UsageProviderKind;
+/**
+ * What the per-row list, the period chart and the period table are keyed by:
+ * the harness that ran the work, or the vendor family of the model. Totals,
+ * mixes and cost quality are grand totals and do not depend on it.
+ */
+export type UsageGroupBy = "harness" | "family";
+
+/** A provider when grouped by harness, a model family when grouped by family. */
+export type UsageGroupKey = UsageProviderKind | ModelFamily;
+
+export interface GroupTotals {
+  readonly key: UsageGroupKey;
   readonly costUsd: number;
   readonly totalTokens: number;
+  /** Distinct assistant responses. */
   readonly records: number;
-  readonly sessions: number;
+  /**
+   * Distinct sessions, only when grouped by harness. A session can use models
+   * from several families, so per-family counts would double count.
+   */
+  readonly sessions?: number;
+  /** The part of `costUsd` priced from model rates rather than reported. */
+  readonly estimatedCostUsd: number;
   readonly costShare: number;
   readonly tokenShare: number;
 }
 
+/** One group's share of a day or hour. */
+export interface PeriodGroupTotals {
+  readonly costUsd: number;
+  readonly totalTokens: number;
+  /** The part of `costUsd` priced from model rates rather than reported. */
+  readonly estimatedCostUsd: number;
+}
+
 export interface ModelTotals {
   readonly model: string;
+  /** The harness that ran it; grouped by family, the one with the most cost. */
   readonly provider: UsageProviderKind;
+  /**
+   * Every harness that ran it, largest cost first. Grouped by harness, a model
+   * row belongs to one harness, so this is just `[provider]`.
+   */
+  readonly providers: readonly UsageProviderKind[];
+  readonly family: ModelFamily;
   readonly costUsd: number;
+  /** The part of `costUsd` priced from model rates rather than reported. */
+  readonly estimatedCostUsd: number;
   readonly totalTokens: number;
   readonly tokens: UsageTokenTotals;
   readonly records: number;
@@ -58,6 +94,20 @@ export interface ModelTotals {
  * A model whose every record lacked rates has an unknown cost, not a zero one.
  * Clients must not present its `costUsd` as a real dollar figure.
  */
+/** The smallest share of a cost priced from model rates that marks it as an estimate. */
+export const ESTIMATE_MARK_MIN_SHARE = 0.01;
+
+/**
+ * The share of `costUsd` priced from model rates, when it is large enough to
+ * mark: a sliver of rate-priced usage beside mostly reported cost does not
+ * make the total an estimate. `null` means show no mark.
+ */
+export function estimatedCostShare(costUsd: number, estimatedCostUsd: number): number | null {
+  if (!(costUsd > 0) || !(estimatedCostUsd > 0)) return null;
+  const share = Math.min(1, estimatedCostUsd / costUsd);
+  return share >= ESTIMATE_MARK_MIN_SHARE ? share : null;
+}
+
 export function isModelCostUnknown(model: ModelTotals): boolean {
   return model.records > 0 && model.unpricedRecords >= model.records;
 }
@@ -66,7 +116,7 @@ export interface DailyTotals {
   readonly day: string;
   readonly costUsd: number;
   readonly totalTokens: number;
-  readonly byProvider: ReadonlyMap<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+  readonly byGroup: ReadonlyMap<UsageGroupKey, PeriodGroupTotals>;
 }
 
 export interface HourlyTotals {
@@ -74,7 +124,7 @@ export interface HourlyTotals {
   readonly hourStart: string;
   readonly costUsd: number;
   readonly totalTokens: number;
-  readonly byProvider: ReadonlyMap<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+  readonly byGroup: ReadonlyMap<UsageGroupKey, PeriodGroupTotals>;
 }
 
 export interface CostQuality {
@@ -121,7 +171,9 @@ export interface MergedUsage {
   readonly totalTokens: number;
   readonly records: number;
   readonly sessions: number;
-  readonly providers: readonly ProviderTotals[];
+  /** Per harness or per model family, by `groupBy`. */
+  readonly groups: readonly GroupTotals[];
+  /** Per harness and model, or per model across harnesses when grouped by family. */
   readonly models: readonly ModelTotals[];
   readonly daily: readonly DailyTotals[];
   readonly hourly: readonly HourlyTotals[];
@@ -328,7 +380,7 @@ const EMPTY_MERGED: MergedUsage = {
   totalTokens: 0,
   records: 0,
   sessions: 0,
-  providers: [],
+  groups: [],
   models: [],
   daily: [],
   hourly: [],
@@ -353,10 +405,14 @@ const EMPTY_MERGED: MergedUsage = {
  * reported so the UI can identify which side needs updating. Versions in
  * [{@link USAGE_MERGE_COMPATIBLE_SINCE}, expected] still merge, so an additive
  * provider expansion does not drop Claude/Codex totals from older servers.
+ *
+ * `groupBy` re-keys the groups, the period series and the model rows; every
+ * grand total is the same either way.
  */
 export function mergeUsage(
   environments: readonly EnvironmentUsage[],
   expectedContractVersion: number,
+  groupBy: UsageGroupBy = "harness",
 ): MergedUsage {
   if (environments.length === 0) return EMPTY_MERGED;
 
@@ -400,15 +456,32 @@ export function mergeUsage(
   const categoryCost = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
   const speedCost = { fast: 0, ultrafast: 0, premium: 0 };
 
-  const providerAccumulator = new Map<
-    UsageProviderKind,
-    { costUsd: number; totalTokens: number; records: number; sessions: number }
+  const groupAccumulator = new Map<
+    UsageGroupKey,
+    {
+      costUsd: number;
+      totalTokens: number;
+      records: number;
+      sessions: number;
+      estimatedCostUsd: number;
+    }
   >();
+  const familyByModel = new Map<string, ModelFamily>();
+  const familyOf = (model: string): ModelFamily => {
+    let family = familyByModel.get(model);
+    if (family === undefined) {
+      family = modelFamily(model);
+      familyByModel.set(model, family);
+    }
+    return family;
+  };
   const modelAccumulator = new Map<
     string,
     {
-      provider: UsageProviderKind;
+      model: string;
+      costByProvider: Map<UsageProviderKind, number>;
       costUsd: number;
+      estimatedCostUsd: number;
       totalTokens: number;
       tokens: UsageTokenTotals;
       records: number;
@@ -421,7 +494,7 @@ export function mergeUsage(
     {
       costUsd: number;
       totalTokens: number;
-      byProvider: Map<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+      byGroup: Map<UsageGroupKey, PeriodGroupTotals>;
     }
   >();
   const hourlyAccumulator = new Map<
@@ -431,9 +504,23 @@ export function mergeUsage(
       hourStart: string;
       costUsd: number;
       totalTokens: number;
-      byProvider: Map<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+      byGroup: Map<UsageGroupKey, PeriodGroupTotals>;
     }
   >();
+  const addToPeriod = (
+    byGroup: Map<UsageGroupKey, PeriodGroupTotals>,
+    key: UsageGroupKey,
+    costUsd: number,
+    totalTokens: number,
+    estimatedCostUsd: number,
+  ) => {
+    const previous = byGroup.get(key);
+    byGroup.set(key, {
+      costUsd: (previous?.costUsd ?? 0) + costUsd,
+      totalTokens: (previous?.totalTokens ?? 0) + totalTokens,
+      estimatedCostUsd: (previous?.estimatedCostUsd ?? 0) + estimatedCostUsd,
+    });
+  };
   const contributingEnvironments: EnvironmentId[] = [];
 
   for (const environment of current) {
@@ -447,19 +534,23 @@ export function mergeUsage(
 
     for (const [providerKind, providerSessions] of sessionsByProvider) {
       sessions += providerSessions;
-      if (providerSessions === 0) continue;
-      const provider = providerAccumulator.get(providerKind) ?? {
+      if (providerSessions === 0 || groupBy !== "harness") continue;
+      const provider = groupAccumulator.get(providerKind) ?? {
         costUsd: 0,
         totalTokens: 0,
         records: 0,
         sessions: 0,
+        estimatedCostUsd: 0,
       };
       provider.sessions += providerSessions;
-      providerAccumulator.set(providerKind, provider);
+      groupAccumulator.set(providerKind, provider);
     }
 
     for (const bucket of buckets) {
       const tokens = bucketTokens(bucket);
+      const family = familyOf(bucket.model);
+      const groupKey: UsageGroupKey = groupBy === "family" ? family : bucket.provider;
+      const estimatedCostUsd = bucket.costSource === "modelPriced" ? bucket.costUsd : 0;
 
       costUsd += bucket.costUsd;
       cacheSavingsUsd += bucket.cacheSavingsUsd;
@@ -481,21 +572,25 @@ export function mergeUsage(
       speedCost.ultrafast += bucket.ultrafastCostUsd ?? 0;
       speedCost.premium += bucket.speedPremiumUsd ?? 0;
 
-      const provider = providerAccumulator.get(bucket.provider) ?? {
+      const group = groupAccumulator.get(groupKey) ?? {
         costUsd: 0,
         totalTokens: 0,
         records: 0,
         sessions: 0,
+        estimatedCostUsd: 0,
       };
-      provider.costUsd += bucket.costUsd;
-      provider.totalTokens += tokens;
-      provider.records += bucket.records;
-      providerAccumulator.set(bucket.provider, provider);
+      group.costUsd += bucket.costUsd;
+      group.totalTokens += tokens;
+      group.records += bucket.records;
+      group.estimatedCostUsd += estimatedCostUsd;
+      groupAccumulator.set(groupKey, group);
 
-      const modelKey = `${bucket.provider} ${bucket.model}`;
+      const modelKey = groupBy === "family" ? bucket.model : `${bucket.provider} ${bucket.model}`;
       const model = modelAccumulator.get(modelKey) ?? {
-        provider: bucket.provider,
+        model: bucket.model,
+        costByProvider: new Map<UsageProviderKind, number>(),
         costUsd: 0,
+        estimatedCostUsd: 0,
         totalTokens: 0,
         tokens: {
           uncachedInputTokens: 0,
@@ -509,6 +604,11 @@ export function mergeUsage(
         unpricedTokens: 0,
       };
       model.costUsd += bucket.costUsd;
+      model.estimatedCostUsd += estimatedCostUsd;
+      model.costByProvider.set(
+        bucket.provider,
+        (model.costByProvider.get(bucket.provider) ?? 0) + bucket.costUsd,
+      );
       model.totalTokens += tokens;
       model.tokens = {
         uncachedInputTokens: model.tokens.uncachedInputTokens + bucket.totals.uncachedInputTokens,
@@ -527,14 +627,11 @@ export function mergeUsage(
       const day = dailyAccumulator.get(bucket.day) ?? {
         costUsd: 0,
         totalTokens: 0,
-        byProvider: new Map<UsageProviderKind, { costUsd: number; totalTokens: number }>(),
+        byGroup: new Map<UsageGroupKey, PeriodGroupTotals>(),
       };
       day.costUsd += bucket.costUsd;
       day.totalTokens += tokens;
-      const dayProvider = day.byProvider.get(bucket.provider) ?? { costUsd: 0, totalTokens: 0 };
-      dayProvider.costUsd += bucket.costUsd;
-      dayProvider.totalTokens += tokens;
-      day.byProvider.set(bucket.provider, dayProvider);
+      addToPeriod(day.byGroup, groupKey, bucket.costUsd, tokens, estimatedCostUsd);
       dailyAccumulator.set(bucket.day, day);
 
       if (bucket.hourStart !== undefined) {
@@ -543,17 +640,11 @@ export function mergeUsage(
           hourStart: bucket.hourStart,
           costUsd: 0,
           totalTokens: 0,
-          byProvider: new Map<UsageProviderKind, { costUsd: number; totalTokens: number }>(),
+          byGroup: new Map<UsageGroupKey, PeriodGroupTotals>(),
         };
         hour.costUsd += bucket.costUsd;
         hour.totalTokens += tokens;
-        const hourProvider = hour.byProvider.get(bucket.provider) ?? {
-          costUsd: 0,
-          totalTokens: 0,
-        };
-        hourProvider.costUsd += bucket.costUsd;
-        hourProvider.totalTokens += tokens;
-        hour.byProvider.set(bucket.provider, hourProvider);
+        addToPeriod(hour.byGroup, groupKey, bucket.costUsd, tokens, estimatedCostUsd);
         hourlyAccumulator.set(bucket.hourStart, hour);
       }
     }
@@ -561,31 +652,41 @@ export function mergeUsage(
 
   const totalTokens = uncachedInputTokens + cachedInputTokens + cacheCreationTokens + outputTokens;
 
-  const providers: ProviderTotals[] = [...providerAccumulator.entries()]
-    .map(([provider, totals]) => ({
-      provider,
+  const groups: GroupTotals[] = [...groupAccumulator.entries()]
+    .map(([key, totals]) => ({
+      key,
       costUsd: totals.costUsd,
       totalTokens: totals.totalTokens,
       records: totals.records,
-      sessions: totals.sessions,
+      ...(groupBy === "harness" ? { sessions: totals.sessions } : {}),
+      estimatedCostUsd: totals.estimatedCostUsd,
       costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
       tokenShare: totalTokens === 0 ? 0 : totals.totalTokens / totalTokens,
     }))
     .sort((a, b) => b.costUsd - a.costUsd);
 
-  const models: ModelTotals[] = [...modelAccumulator.entries()]
-    .map(([key, totals]) => ({
-      model: key.slice(key.indexOf(" ") + 1),
-      provider: totals.provider,
-      costUsd: totals.costUsd,
-      totalTokens: totals.totalTokens,
-      tokens: totals.tokens,
-      records: totals.records,
-      unpricedRecords: totals.unpricedRecords,
-      unpricedTokens: totals.unpricedTokens,
-      costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
-      tokenShare: totalTokens === 0 ? 0 : totals.totalTokens / totalTokens,
-    }))
+  const models: ModelTotals[] = [...modelAccumulator.values()]
+    .map((totals) => {
+      // A stable sort keeps first-seen order between harnesses with equal cost.
+      const providers = [...totals.costByProvider.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([provider]) => provider);
+      return {
+        model: totals.model,
+        provider: providers[0]!,
+        providers,
+        family: familyOf(totals.model),
+        costUsd: totals.costUsd,
+        estimatedCostUsd: totals.estimatedCostUsd,
+        totalTokens: totals.totalTokens,
+        tokens: totals.tokens,
+        records: totals.records,
+        unpricedRecords: totals.unpricedRecords,
+        unpricedTokens: totals.unpricedTokens,
+        costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
+        tokenShare: totalTokens === 0 ? 0 : totals.totalTokens / totalTokens,
+      };
+    })
     .sort((a, b) => b.costUsd - a.costUsd || b.totalTokens - a.totalTokens);
 
   const daily: DailyTotals[] = [...dailyAccumulator.entries()]
@@ -593,7 +694,7 @@ export function mergeUsage(
       day,
       costUsd: totals.costUsd,
       totalTokens: totals.totalTokens,
-      byProvider: totals.byProvider,
+      byGroup: totals.byGroup,
     }))
     .sort((a, b) => a.day.localeCompare(b.day));
 
@@ -611,7 +712,7 @@ export function mergeUsage(
     totalTokens,
     records,
     sessions,
-    providers,
+    groups,
     models,
     daily,
     hourly,

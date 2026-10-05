@@ -1,8 +1,12 @@
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import type { UsageProviderKind } from "@t3tools/contracts";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
+import type {
+  DailyTotals,
+  HourlyTotals,
+  UsageGroupBy,
+  UsageGroupKey,
+} from "@t3tools/shared/usageMerge";
 import {
   formatDayShort,
   formatHourShort,
@@ -11,21 +15,23 @@ import {
   formatUsd,
 } from "@t3tools/shared/usageFormat";
 import { cn } from "~/lib/utils";
-import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
 import { observeResize } from "~/lib/observeResize";
+import { EstimateMark } from "./UsageEstimateMark";
+import type { UsageSeries } from "./usageProviders";
 
 const VIEW_WIDTH = 960;
 const VIEW_HEIGHT = 260;
 const TICK_COUNT = 4;
 const PLOT_TOP = 8;
-const NONE_LOADING: ReadonlySet<UsageProviderKind> = new Set();
+const NONE_LOADING: ReadonlySet<UsageGroupKey> = new Set();
 
 export type UsageChartMetric = "tokens" | "cost";
 
 interface UsageProviderChartProps {
-  readonly providers: readonly UsageProviderKind[];
-  /** Providers whose figures are still coming in: their lines are muted. */
-  readonly loadingProviders?: ReadonlySet<UsageProviderKind>;
+  /** Plotted series, in reading order: harnesses or model families. */
+  readonly series: readonly UsageSeries[];
+  /** Series whose figures are still coming in: their lines are muted. */
+  readonly loadingKeys?: ReadonlySet<UsageGroupKey>;
   readonly days: readonly string[];
   readonly daily: readonly DailyTotals[];
   readonly hours: readonly string[];
@@ -34,13 +40,18 @@ interface UsageProviderChartProps {
   readonly referenceTime: string | undefined;
   readonly resolution: "day" | "hour";
   readonly timeZone: string;
+  /** Grouped by family, values that include cost priced from model rates are marked. */
+  readonly groupBy?: UsageGroupBy;
 }
 
-/** One day's per-provider values, shared by the paths and the hover readout. */
+/** One day's per-series values, shared by the paths and the hover readout. */
 export interface DayColumn {
   readonly bands: readonly {
-    readonly provider: UsageProviderKind;
+    readonly key: UsageGroupKey;
     readonly value: number;
+    /** The cost value includes cost priced from model rates. */
+    readonly costUsd: number;
+    readonly estimatedCostUsd: number;
   }[];
   readonly total: number;
 }
@@ -50,27 +61,23 @@ interface Point {
   readonly y: number;
 }
 
-function valueFor(
-  totals: DailyTotals | HourlyTotals | undefined,
-  provider: UsageProviderKind,
-  metric: UsageChartMetric,
-): number {
-  const entry = totals?.byProvider.get(provider);
-  if (entry === undefined) return 0;
-  return metric === "tokens" ? entry.totalTokens : entry.costUsd;
-}
-
 export function buildPeriodColumns(
   periods: readonly string[],
   byPeriod: ReadonlyMap<string, DailyTotals | HourlyTotals>,
   metric: UsageChartMetric,
+  keys: readonly UsageGroupKey[],
 ): readonly DayColumn[] {
   return periods.map((period) => {
-    const entry = byPeriod.get(period);
-    const bands = PROVIDER_ORDER.map((provider) => ({
-      provider,
-      value: valueFor(entry, provider, metric),
-    }));
+    const totals = byPeriod.get(period);
+    const bands = keys.map((key) => {
+      const entry = totals?.byGroup.get(key);
+      return {
+        key,
+        value: entry === undefined ? 0 : metric === "tokens" ? entry.totalTokens : entry.costUsd,
+        costUsd: entry?.costUsd ?? 0,
+        estimatedCostUsd: metric === "cost" ? (entry?.estimatedCostUsd ?? 0) : 0,
+      };
+    });
     return { bands, total: bands.reduce((sum, band) => sum + band.value, 0) };
   });
 }
@@ -182,21 +189,18 @@ export function niceScale(peak: number, count: number): { max: number; ticks: re
 const PLACEHOLDER_TICKS = Array.from({ length: TICK_COUNT + 1 }, (_, index) => index);
 
 /**
- * Scales to the largest single provider-period. With nothing to show yet while
- * providers load, unlabeled placeholder gridlines hold their usual spacing so
+ * Scales to the largest single series-period. With nothing to show yet while
+ * series load, unlabeled placeholder gridlines hold their usual spacing so
  * nothing shifts on arrival.
  */
-export function chartScale(
-  columns: readonly DayColumn[],
-  loadingProviders: ReadonlySet<UsageProviderKind>,
-) {
+export function chartScale(columns: readonly DayColumn[], loadingKeys: ReadonlySet<UsageGroupKey>) {
   // Not the sum: layered series each measure from zero, so a combined peak
   // would leave the plot permanently half empty.
   const peak = columns.reduce(
     (max, column) => column.bands.reduce((inner, band) => Math.max(inner, band.value), max),
     0,
   );
-  return peak === 0 && loadingProviders.size > 0
+  return peak === 0 && loadingKeys.size > 0
     ? { max: TICK_COUNT, ticks: PLACEHOLDER_TICKS, labeled: false }
     : { ...niceScale(peak, TICK_COUNT), labeled: true };
 }
@@ -207,19 +211,23 @@ function valueToY(value: number, max: number) {
   return max === 0 ? VIEW_HEIGHT : VIEW_HEIGHT - (value / max) * (VIEW_HEIGHT - PLOT_TOP);
 }
 
-/** Per-provider paths in paint order, heaviest first. */
+/** Per-series paths in paint order, heaviest first. */
 function buildChart(
   periods: readonly string[],
   byPeriod: ReadonlyMap<string, DailyTotals | HourlyTotals>,
   metric: UsageChartMetric,
-  providers: readonly UsageProviderKind[],
-  loadingProviders: ReadonlySet<UsageProviderKind>,
+  series: readonly UsageSeries[],
+  loadingKeys: ReadonlySet<UsageGroupKey>,
 ) {
-  const columns = buildPeriodColumns(periods, byPeriod, metric);
-  const scale = chartScale(columns, loadingProviders);
+  const columns = buildPeriodColumns(
+    periods,
+    byPeriod,
+    metric,
+    series.map((entry) => entry.key),
+  );
+  const scale = chartScale(columns, loadingKeys);
   const stepX = periods.length < 2 ? 0 : VIEW_WIDTH / (periods.length - 1);
-  const paths = providers.map((provider) => {
-    const slot = PROVIDER_ORDER.indexOf(provider);
+  const paths = series.map(({ key, color }, slot) => {
     const line = curvePath(
       smoothCurve(
         columns.map((column, periodIndex) => ({
@@ -229,8 +237,9 @@ function buildChart(
       ),
     );
     return {
-      provider,
-      loading: loadingProviders.has(provider),
+      key,
+      color,
+      loading: loadingKeys.has(key),
       total: columns.reduce((sum, column) => sum + (column.bands[slot]?.value ?? 0), 0),
       line,
       area: areaPath(line),
@@ -242,8 +251,8 @@ function buildChart(
 }
 
 export function UsageProviderChart({
-  providers,
-  loadingProviders = NONE_LOADING,
+  series: plotted,
+  loadingKeys = NONE_LOADING,
   days,
   daily,
   hours,
@@ -252,6 +261,7 @@ export function UsageProviderChart({
   referenceTime,
   resolution,
   timeZone,
+  groupBy = "harness",
 }: UsageProviderChartProps) {
   const periods = resolution === "hour" ? hours : days;
   const byPeriod = useMemo(
@@ -267,8 +277,8 @@ export function UsageProviderChart({
   const hoverPositionRef = useRef<{ x: number; y: number } | null>(null);
 
   const { columns, scale, paths, stepX } = useMemo(
-    () => buildChart(periods, byPeriod, metric, providers, loadingProviders),
-    [byPeriod, loadingProviders, metric, periods, providers],
+    () => buildChart(periods, byPeriod, metric, plotted, loadingKeys),
+    [byPeriod, loadingKeys, metric, periods, plotted],
   );
   const toY = (value: number) => valueToY(value, scale.max);
   // The delay keeps a quick answer from flashing, as with the page's figures.
@@ -332,7 +342,7 @@ export function UsageProviderChart({
 
   const hoveredPeriod = hoverIndex === null ? undefined : periods[hoverIndex];
   const hoveredColumn = hoverIndex === null ? undefined : columns[hoverIndex];
-  const partial = providers.some((provider) => loadingProviders.has(provider));
+  const partial = plotted.some(({ key }) => loadingKeys.has(key));
   const formatPeriod = (period: string) =>
     resolution === "hour" ? formatHourShort(period, timeZone) : formatDayShort(period);
   const formatTooltipPeriod = (period: string) =>
@@ -372,7 +382,7 @@ export function UsageProviderChart({
             viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
             preserveAspectRatio="none"
             role="img"
-            aria-label={`${resolution === "hour" ? "Hourly" : "Daily"} ${metric === "tokens" ? "processed tokens" : "cost"} by provider`}
+            aria-label={`${resolution === "hour" ? "Hourly" : "Daily"} ${metric === "tokens" ? "processed tokens" : "cost"} by ${groupBy === "family" ? "model family" : "provider"}`}
           >
             {scale.ticks.map((tick) => {
               const y = toY(tick);
@@ -392,22 +402,22 @@ export function UsageProviderChart({
             })}
 
             {/* Fills first, then every stroke, so no series covers another's line. */}
-            {paths.map(({ provider, loading, area }) => (
+            {paths.map(({ key, color, loading, area }) => (
               <path
-                key={provider}
+                key={key}
                 d={area}
                 className={seriesClassName(loading)}
-                fill={PROVIDER_PRESENTATION[provider].color}
+                fill={color}
                 fillOpacity={0.12}
               />
             ))}
-            {paths.map(({ provider, loading, line }) => (
+            {paths.map(({ key, color, loading, line }) => (
               <path
-                key={provider}
+                key={key}
                 d={line}
                 className={seriesClassName(loading)}
                 fill="none"
-                stroke={PROVIDER_PRESENTATION[provider].color}
+                stroke={color}
                 strokeWidth={2}
                 vectorEffect="non-scaling-stroke"
               />
@@ -437,29 +447,39 @@ export function UsageProviderChart({
               }}
             >
               <div className="mb-1 text-muted-foreground">{formatTooltipPeriod(hoveredPeriod)}</div>
-              {providers.map((provider) => {
-                const { label, driverKind } = PROVIDER_PRESENTATION[provider];
+              {plotted.map(({ key, label, color, driverKind }, seriesIndex) => {
+                const band = hoveredColumn?.bands[seriesIndex];
                 return (
-                  <div key={provider} className="flex items-center justify-between gap-3">
+                  <div key={key} className="flex items-center justify-between gap-3">
                     <span className="flex items-center gap-1.5 text-muted-foreground">
-                      <ProviderInstanceIcon
-                        driverKind={driverKind}
-                        displayName={label}
-                        iconClassName="size-3"
-                      />
+                      {driverKind === undefined ? (
+                        <span
+                          aria-hidden
+                          className="size-2 shrink-0 rounded-full"
+                          style={{ backgroundColor: color }}
+                        />
+                      ) : (
+                        <ProviderInstanceIcon
+                          driverKind={driverKind}
+                          displayName={label}
+                          iconClassName="size-3"
+                        />
+                      )}
                       {label}
                     </span>
                     <span
                       className={cn(
                         "tabular-nums",
-                        loadingProviders.has(provider)
-                          ? "text-muted-foreground"
-                          : "text-foreground",
+                        loadingKeys.has(key) ? "text-muted-foreground" : "text-foreground",
                       )}
                     >
-                      {format(
-                        hoveredColumn?.bands.find((band) => band.provider === provider)?.value ?? 0,
-                      )}
+                      {groupBy === "family" && band !== undefined ? (
+                        <EstimateMark
+                          costUsd={band.costUsd}
+                          estimatedCostUsd={band.estimatedCostUsd}
+                        />
+                      ) : null}
+                      {format(band?.value ?? 0)}
                     </span>
                   </div>
                 );

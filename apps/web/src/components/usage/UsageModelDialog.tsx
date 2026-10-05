@@ -1,5 +1,11 @@
+import type { UsageProviderKind } from "@t3tools/contracts";
 import { formatPercent, formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
-import { isModelCostUnknown, type ModelTotals } from "@t3tools/shared/usageMerge";
+import {
+  isModelCostUnknown,
+  type ModelTotals,
+  type UsageGroupBy,
+} from "@t3tools/shared/usageMerge";
+import { MODEL_FAMILY_LABEL } from "@t3tools/shared/usageModelFamily";
 import { useMemo } from "react";
 
 import { mergeAnsweredUsage, type EnvironmentUsageStatus } from "../../state/usage";
@@ -23,7 +29,7 @@ import {
   speedCostSegments,
   tokenTypeSegments,
 } from "./usageBreakdown";
-import { PROVIDER_PRESENTATION } from "./usageProviders";
+import { PROVIDER_PRESENTATION, seriesFor } from "./usageProviders";
 
 export interface UsageChartWindow {
   readonly days: readonly string[];
@@ -36,33 +42,50 @@ export interface UsageChartWindow {
 /**
  * One model's usage in the current window, opened from the Breakdown list.
  * The trend and mixes come from the same merge as the page, narrowed to this
- * model's buckets.
+ * model's buckets. Grouped by family, a model row spans every harness that ran
+ * it, so the dialog does too.
  */
 export function UsageModelDialog({
   model,
+  groupBy = "harness",
   environments,
+  hiddenProviders,
   metric,
   chartWindow,
   onSetPrice,
   onClose,
 }: {
   readonly model: ModelTotals;
+  readonly groupBy?: UsageGroupBy;
   readonly environments: readonly EnvironmentUsageStatus[];
+  /** Providers filtered out of the page. A family row spans harnesses, so its dialog leaves them out too. */
+  readonly hiddenProviders: ReadonlySet<UsageProviderKind>;
   readonly metric: UsageChartMetric;
   readonly chartWindow: UsageChartWindow;
   readonly onSetPrice: () => void;
   readonly onClose: () => void;
 }) {
+  const byFamily = groupBy === "family";
   const usage = useMemo(
     () =>
       mergeAnsweredUsage(
         environments,
-        (bucket) => bucket.provider === model.provider && bucket.model === model.model,
+        (bucket) =>
+          bucket.model === model.model &&
+          !hiddenProviders.has(bucket.provider) &&
+          (byFamily || bucket.provider === model.provider),
+        groupBy,
       ),
-    [environments, model.provider, model.model],
+    [environments, hiddenProviders, model.provider, model.model, byFamily, groupBy],
   );
-  const providers = useMemo(() => [model.provider], [model.provider]);
-  const presentation = PROVIDER_PRESENTATION[model.provider];
+  const groupKey = byFamily ? model.family : model.provider;
+  const series = useMemo(
+    () => seriesFor(groupBy).filter((entry) => entry.key === groupKey),
+    [groupBy, groupKey],
+  );
+  const harnessLabels = model.providers
+    .map((provider) => PROVIDER_PRESENTATION[provider].label)
+    .join(", ");
   const costUnknown = isModelCostUnknown(model);
   const hitRate = cacheHitRate(model);
   const perMillion = costPerMillionTokens(model);
@@ -83,15 +106,18 @@ export function UsageModelDialog({
       <DialogPopup className="max-w-3xl">
         <DialogHeader>
           <div className="flex items-center gap-2">
-            <ProviderInstanceIcon
-              driverKind={presentation.driverKind}
-              displayName={presentation.label}
-              iconClassName="size-5"
-            />
+            {model.providers.map((provider) => (
+              <ProviderInstanceIcon
+                key={provider}
+                driverKind={PROVIDER_PRESENTATION[provider].driverKind}
+                displayName={PROVIDER_PRESENTATION[provider].label}
+                iconClassName="size-5"
+              />
+            ))}
             <DialogTitle>{model.model}</DialogTitle>
           </div>
           <DialogDescription>
-            {presentation.label}
+            {byFamily ? `${MODEL_FAMILY_LABEL[model.family]} · ${harnessLabels}` : harnessLabels}
             {costUnknown ? "" : ` · ${formatPercent(model.costShare)} of cost`}
           </DialogDescription>
         </DialogHeader>
@@ -108,7 +134,8 @@ export function UsageModelDialog({
 
             {/* Unpriced cost is unknown, not zero, so its trend shows tokens. */}
             <UsageProviderChart
-              providers={providers}
+              series={series}
+              groupBy={groupBy}
               days={chartWindow.days}
               daily={usage.daily}
               hours={chartWindow.hours}

@@ -9,10 +9,12 @@ import {
   usageProgress,
 } from "@t3tools/client-runtime/state/usage-progress";
 import {
+  estimatedCostShare,
   isCompatibleUsageContractVersion,
   isModelCostUnknown,
   type DailyTotals,
   type MergedUsage,
+  type UsageGroupBy,
 } from "@t3tools/shared/usageMerge";
 import {
   enumerateDays,
@@ -54,7 +56,14 @@ import { UsageLimitsSection } from "./UsageLimitsPooled";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import type { UsageChartMetric } from "./usageChartData";
-import { PROVIDER_LABEL, useProviderColors, useUsageMixColors } from "./usageProviders";
+import {
+  PROVIDER_ICON,
+  PROVIDER_LABEL,
+  useProviderColors,
+  useUsageMixColors,
+  useUsageSeries,
+  type UsageSeries,
+} from "./usageProviders";
 
 type UsageTab = "usage" | "limits";
 const TAB_OPTIONS = [
@@ -75,6 +84,15 @@ const METRIC_OPTIONS = [
   { value: "cost", label: "Cost" },
   { value: "tokens", label: "Tokens" },
 ] as const satisfies readonly { value: UsageChartMetric; label: string }[];
+
+const GROUP_BY_OPTIONS = [
+  { value: "harness", label: "Harness", accessibilityLabel: "Group by harness" },
+  { value: "family", label: "Model family", accessibilityLabel: "Group by model family" },
+] as const satisfies readonly { value: UsageGroupBy; label: string; accessibilityLabel: string }[];
+
+/** Prefixes cost that includes usage priced from model rates, grouped by family. */
+const ESTIMATE_MARK = "≈";
+const ESTIMATE_FOOTNOTE = "≈ API estimate from model rates";
 
 const CHART_HEIGHT = 180;
 const providerLabel = (provider: UsageProviderKind) => PROVIDER_LABEL[provider];
@@ -107,6 +125,8 @@ export function UsageRouteScreen() {
     window: makeWindow(30),
   }));
   const [metric, setMetric] = useState<UsageChartMetric>("cost");
+  const [groupBy, setGroupBy] = useState<UsageGroupBy>("harness");
+  const series = useUsageSeries(groupBy);
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
@@ -114,6 +134,7 @@ export function UsageRouteScreen() {
   const { merged, environments, selectedEnvironments, isPending, refresh } = useUsage(
     window,
     selectedEnvironmentIds,
+    groupBy,
   );
   const isFocused = useIsFocused();
   const limits = useRefreshLimits(selectedEnvironmentIds, isFocused && tab === "limits");
@@ -160,7 +181,7 @@ export function UsageRouteScreen() {
             day: hour.hourStart,
             costUsd: hour.costUsd,
             totalTokens: hour.totalTokens,
-            byProvider: hour.byProvider,
+            byGroup: hour.byGroup,
           }))
         : merged.daily,
     [isPast24Hours, merged.daily, merged.hourly],
@@ -323,6 +344,13 @@ export function UsageRouteScreen() {
                   className="w-full ios:w-36"
                 />
               </View>
+              <SegmentedControl
+                options={GROUP_BY_OPTIONS}
+                selected={groupBy}
+                onSelect={setGroupBy}
+                size="compact"
+                className="w-full"
+              />
               <ChatGptUsageSummary selectedEnvironmentIds={selectedEnvironmentIds} />
               {merged.duplicateSources.length > 0 ? (
                 <Text className="text-sm text-foreground-muted">
@@ -364,6 +392,7 @@ export function UsageRouteScreen() {
                   <UsageUpdating dimmed={progress.dimmed} label={progress.label}>
                     <ChartCard
                       merged={merged}
+                      series={series}
                       days={chartDays}
                       daily={chartTotals}
                       metric={metric}
@@ -372,8 +401,10 @@ export function UsageRouteScreen() {
                       isPast24Hours={isPast24Hours}
                       timeZone={window.timeZone}
                     />
-                    <ProviderSection
+                    <GroupSection
                       merged={merged}
+                      series={series}
+                      groupBy={groupBy}
                       metric={metric}
                       cursorAccessEnvironments={cursorAccessEnvironments}
                       showCursorEnvironment={selectedEnvironments.length > 1}
@@ -381,7 +412,12 @@ export function UsageRouteScreen() {
                     />
                     <TotalsSection merged={merged} isPast24Hours={isPast24Hours} />
                     <CostSection merged={merged} />
-                    <ModelsSection merged={merged} metric={metric} />
+                    <ModelsSection
+                      merged={merged}
+                      series={series}
+                      groupBy={groupBy}
+                      metric={metric}
+                    />
                   </UsageUpdating>
                 </>
               )}
@@ -547,6 +583,7 @@ function CursorEnableLimits({
 /** Headline figure, the animated daily chart, and its legend, in one card. */
 function ChartCard(props: {
   readonly merged: MergedUsage;
+  readonly series: readonly UsageSeries[];
   readonly days: readonly string[];
   readonly daily: readonly DailyTotals[];
   readonly metric: UsageChartMetric;
@@ -556,7 +593,7 @@ function ChartCard(props: {
   readonly timeZone: string;
 }) {
   const { merged, metric } = props;
-  const colors = useProviderColors();
+  const seriesByKey = new Map(props.series.map((entry) => [entry.key, entry]));
   const hasActivity = props.daily.some((period) => period.totalTokens > 0);
 
   return (
@@ -579,6 +616,7 @@ function ChartCard(props: {
         <UsageDailyChart
           days={props.days}
           daily={props.daily}
+          series={props.series}
           metric={metric}
           height={CHART_HEIGHT}
         />
@@ -594,15 +632,16 @@ function ChartCard(props: {
             ? formatHourShort(props.days[0] ?? "", props.timeZone)
             : formatDayShort(props.sinceDay)}
         </Text>
-        <View className="flex-row items-center gap-4">
-          {merged.providers.map((provider) => (
-            <View key={provider.provider} className="flex-row items-center gap-1.5">
+        {/* Wraps: grouped by family there can be a dozen entries. */}
+        <View className="min-w-0 shrink flex-row flex-wrap items-center justify-center gap-x-4 gap-y-1">
+          {merged.groups.map((group) => (
+            <View key={group.key} className="flex-row items-center gap-1.5">
               <View
                 className="size-2 rounded-full"
-                style={{ backgroundColor: colors[provider.provider] }}
+                style={{ backgroundColor: seriesByKey.get(group.key)?.color }}
               />
               <Text className="text-xs text-foreground-muted">
-                {PROVIDER_LABEL[provider.provider]}
+                {seriesByKey.get(group.key)?.label}
               </Text>
             </View>
           ))}
@@ -617,31 +656,37 @@ function ChartCard(props: {
   );
 }
 
-function ProviderSection(props: {
+function GroupSection(props: {
   readonly merged: MergedUsage;
+  readonly series: readonly UsageSeries[];
+  readonly groupBy: UsageGroupBy;
   readonly metric: UsageChartMetric;
   readonly cursorAccessEnvironments: readonly EnvironmentUsageStatus[];
   readonly showCursorEnvironment: boolean;
   readonly onCursorEnabled: () => void;
 }) {
   const { merged, metric } = props;
-  const colors = useProviderColors();
-  if (merged.providers.length === 0 && props.cursorAccessEnvironments.length === 0) return null;
+  const byFamily = props.groupBy === "family";
+  const seriesByKey = new Map(props.series.map((entry) => [entry.key, entry]));
+  if (merged.groups.length === 0 && props.cursorAccessEnvironments.length === 0) return null;
 
   // Ranked by whatever the toggle is showing, so the rows always descend.
   // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023 method.
-  const ordered = [...merged.providers].sort((a, b) =>
+  const ordered = [...merged.groups].sort((a, b) =>
     metric === "cost" ? b.costUsd - a.costUsd : b.totalTokens - a.totalTokens,
   );
   const rows: Array<
-    | { readonly kind: "usage"; readonly provider: (typeof ordered)[number] }
+    | { readonly kind: "usage"; readonly group: (typeof ordered)[number] }
     | { readonly kind: "enable"; readonly environment: EnvironmentUsageStatus }
-  > = ordered.map((provider) => ({ kind: "usage", provider }));
-  const cursorInsertAt =
-    Math.max(
-      ordered.findIndex((provider) => provider.provider === "codex"),
-      ordered.findIndex((provider) => provider.provider === "claude"),
-    ) + 1;
+  > = ordered.map((group) => ({ kind: "usage", group }));
+  // The prompt to read Cursor usage belongs beside the harness rows; family
+  // rows have no harness position, so it follows them.
+  const cursorInsertAt = byFamily
+    ? rows.length
+    : Math.max(
+        ordered.findIndex((group) => group.key === "codex"),
+        ordered.findIndex((group) => group.key === "claude"),
+      ) + 1;
   rows.splice(
     cursorInsertAt,
     0,
@@ -652,7 +697,17 @@ function ProviderSection(props: {
   );
 
   return (
-    <SettingsSection title="Providers">
+    <SettingsSection
+      title={byFamily ? "Model families" : "Providers"}
+      trailing={
+        byFamily &&
+        merged.groups.some(
+          (group) => estimatedCostShare(group.costUsd, group.estimatedCostUsd) !== null,
+        ) ? (
+          <Text className="px-2 text-xs text-foreground-tertiary">{ESTIMATE_FOOTNOTE}</Text>
+        ) : null
+      }
+    >
       {rows.map((row, index) => {
         if (row.kind === "enable") {
           return (
@@ -666,38 +721,46 @@ function ProviderSection(props: {
             />
           );
         }
-        const provider = row.provider;
-        const share = metric === "cost" ? provider.costShare : provider.tokenShare;
+        const { group } = row;
+        const series = seriesByKey.get(group.key);
+        const share = metric === "cost" ? group.costShare : group.tokenShare;
+        const cost = `${byFamily && estimatedCostShare(group.costUsd, group.estimatedCostUsd) !== null ? ESTIMATE_MARK : ""}${formatUsd(
+          group.costUsd,
+        )}`;
         return (
           <View
-            key={provider.provider}
+            key={group.key}
             className={index === 0 ? "gap-2 p-4" : "gap-2 border-t border-border-subtle p-4"}
           >
             <View className="flex-row items-baseline justify-between gap-3">
-              <View className="flex-row items-center gap-2">
+              <View className="min-w-0 shrink flex-row items-center gap-2">
                 <View
                   className="size-2.5 rounded-full"
-                  style={{ backgroundColor: colors[provider.provider] }}
+                  style={{ backgroundColor: series?.color }}
                 />
-                <Text className="text-lg text-foreground">{PROVIDER_LABEL[provider.provider]}</Text>
+                <Text className="shrink text-lg text-foreground" numberOfLines={1}>
+                  {series?.label}
+                </Text>
               </View>
               <Text className="text-lg tabular-nums text-foreground">
-                {metric === "cost"
-                  ? formatUsd(provider.costUsd)
-                  : formatTokens(provider.totalTokens)}
+                {metric === "cost" ? cost : formatTokens(group.totalTokens)}
               </Text>
             </View>
             <View className="h-1 flex-row overflow-hidden rounded-full bg-subtle">
               <View
                 className="h-full rounded-full"
-                style={{ flex: share, backgroundColor: colors[provider.provider] }}
+                style={{ flex: share, backgroundColor: series?.color }}
               />
               <View style={{ flex: 1 - share }} />
             </View>
             <Text className="text-sm text-foreground-muted">
               {metric === "cost"
-                ? `${formatPercent(share)} of cost · ${formatTokens(provider.totalTokens)} tokens`
-                : `${formatPercent(share)} of tokens · ${formatUsd(provider.costUsd)}`}
+                ? `${formatPercent(share)} of cost · ${formatTokens(group.totalTokens)} tokens`
+                : `${formatPercent(share)} of tokens · ${cost}`}
+              {/* Family rows count responses: a session can span families. */}
+              {byFamily
+                ? ` · ${formatCount(group.records)} ${group.records === 1 ? "response" : "responses"}`
+                : ""}
             </Text>
           </View>
         );
@@ -849,9 +912,16 @@ function MetricCell(props: {
   );
 }
 
-function ModelsSection(props: { readonly merged: MergedUsage; readonly metric: UsageChartMetric }) {
+function ModelsSection(props: {
+  readonly merged: MergedUsage;
+  readonly series: readonly UsageSeries[];
+  readonly groupBy: UsageGroupBy;
+  readonly metric: UsageChartMetric;
+}) {
   const { merged, metric } = props;
+  const byFamily = props.groupBy === "family";
   const colors = useProviderColors();
+  const seriesByKey = new Map(props.series.map((entry) => [entry.key, entry]));
   if (merged.models.length === 0) return null;
 
   // Ranked like the provider rows. .sort() on a copy, not .toSorted(): Hermes
@@ -864,42 +934,59 @@ function ModelsSection(props: { readonly merged: MergedUsage; readonly metric: U
 
   return (
     <SettingsSection title="By model">
-      {ordered.map((model, index) => (
-        <View
-          key={`${model.provider}:${model.model}`}
-          className={
-            index === 0
-              ? "flex-row items-center gap-3 p-4"
-              : "flex-row items-center gap-3 border-t border-border-subtle p-4"
-          }
-        >
+      {ordered.map((model, index) => {
+        const cost = `${byFamily && estimatedCostShare(model.costUsd, model.estimatedCostUsd) !== null ? ESTIMATE_MARK : ""}${formatUsd(
+          model.costUsd,
+        )}`;
+        return (
           <View
-            className="size-2.5 shrink-0 rounded-full"
-            style={{ backgroundColor: colors[model.provider] }}
-          />
-          <View className="min-w-0 flex-1 gap-0.5">
-            <Text className="text-base text-foreground" numberOfLines={1}>
-              {model.model}
-            </Text>
-            <Text className="text-sm text-foreground-muted">
+            key={byFamily ? model.model : `${model.provider}:${model.model}`}
+            className={
+              index === 0
+                ? "flex-row items-center gap-3 p-4"
+                : "flex-row items-center gap-3 border-t border-border-subtle p-4"
+            }
+          >
+            <View
+              className="size-2.5 shrink-0 rounded-full"
+              style={{
+                backgroundColor: byFamily
+                  ? seriesByKey.get(model.family)?.color
+                  : colors[model.provider],
+              }}
+            />
+            <View className="min-w-0 flex-1 gap-0.5">
+              <View className="flex-row items-center gap-1.5">
+                <Text className="shrink text-base text-foreground" numberOfLines={1}>
+                  {model.model}
+                </Text>
+                {/* Where the model ran; the dot carries its family color. */}
+                {byFamily
+                  ? model.providers.map((provider) => (
+                      <ProviderIcon key={provider} provider={PROVIDER_ICON[provider]} size={12} />
+                    ))
+                  : null}
+              </View>
+              <Text className="text-sm text-foreground-muted">
+                {metric === "tokens"
+                  ? `${formatPercent(model.tokenShare)} of tokens · ${
+                      isModelCostUnknown(model) ? "no known rates" : cost
+                    }`
+                  : isModelCostUnknown(model)
+                    ? `no known rates · ${formatTokens(model.totalTokens)} tokens`
+                    : `${formatPercent(model.costShare)} of cost · ${formatTokens(model.totalTokens)} tokens`}
+              </Text>
+            </View>
+            <Text className="text-base tabular-nums text-foreground">
               {metric === "tokens"
-                ? `${formatPercent(model.tokenShare)} of tokens · ${
-                    isModelCostUnknown(model) ? "no known rates" : formatUsd(model.costUsd)
-                  }`
+                ? formatTokens(model.totalTokens)
                 : isModelCostUnknown(model)
-                  ? `no known rates · ${formatTokens(model.totalTokens)} tokens`
-                  : `${formatPercent(model.costShare)} of cost · ${formatTokens(model.totalTokens)} tokens`}
+                  ? "Unpriced"
+                  : cost}
             </Text>
           </View>
-          <Text className="text-base tabular-nums text-foreground">
-            {metric === "tokens"
-              ? formatTokens(model.totalTokens)
-              : isModelCostUnknown(model)
-                ? "Unpriced"
-                : formatUsd(model.costUsd)}
-          </Text>
-        </View>
-      ))}
+        );
+      })}
     </SettingsSection>
   );
 }

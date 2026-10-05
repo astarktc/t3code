@@ -19,7 +19,12 @@ import {
 } from "@t3tools/contracts";
 import { needsCursorKeychainAccess, refreshUsage } from "@t3tools/client-runtime/state/usage";
 import { resolveUsageAccess } from "@t3tools/client-runtime/state/usage-access";
-import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
+import {
+  mergeUsage,
+  type EnvironmentUsage,
+  type MergedUsage,
+  type UsageGroupBy,
+} from "@t3tools/shared/usageMerge";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback, useMemo } from "react";
@@ -109,6 +114,7 @@ export interface UsageView {
 export function useUsage(
   input: UsageSummaryInput,
   selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
+  groupBy: UsageGroupBy = "harness",
 ): UsageView {
   const windowKey = useMemo(
     () =>
@@ -171,8 +177,8 @@ export function useUsage(
             },
           ],
     );
-    return mergeUsage(answered, USAGE_CONTRACT_VERSION);
-  }, [selectedEnvironments]);
+    return mergeUsage(answered, USAGE_CONTRACT_VERSION, groupBy);
+  }, [selectedEnvironments, groupBy]);
 
   const answeredCount = selectedEnvironments.filter(
     (environment) => environment.summary !== null,

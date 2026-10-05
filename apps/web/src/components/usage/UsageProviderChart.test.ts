@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildPeriodColumns, chartScale, niceScale } from "./UsageProviderChart";
-import { providersWithUsage } from "./usageProviders";
+import { PROVIDER_ORDER, seriesWithUsage } from "./usageProviders";
 
 describe("chartScale", () => {
   const column = (codex: number) => ({
     total: codex,
-    bands: [{ provider: "codex" as const, value: codex }],
+    bands: [{ key: "codex" as const, value: codex, costUsd: 0, estimatedCostUsd: 0 }],
   });
 
   it("holds unlabeled placeholder gridlines while loading providers have nothing to show", () => {
@@ -71,9 +71,9 @@ describe("buildPeriodColumns", () => {
         day: "2026-08-01",
         costUsd: 30,
         totalTokens: 300,
-        byProvider: new Map([
-          ["codex" as const, { costUsd: 10, totalTokens: 100 }],
-          ["claude" as const, { costUsd: 20, totalTokens: 200 }],
+        byGroup: new Map([
+          ["codex" as const, { costUsd: 10, totalTokens: 100, estimatedCostUsd: 10 }],
+          ["claude" as const, { costUsd: 20, totalTokens: 200, estimatedCostUsd: 0 }],
         ]),
       },
     ],
@@ -84,55 +84,103 @@ describe("buildPeriodColumns", () => {
         day: "2026-08-03",
         costUsd: 5,
         totalTokens: 50,
-        byProvider: new Map([["claude" as const, { costUsd: 5, totalTokens: 50 }]]),
+        byGroup: new Map([
+          ["claude" as const, { costUsd: 5, totalTokens: 50, estimatedCostUsd: 0 }],
+        ]),
       },
     ],
   ]);
 
   it("plots each day on its own", () => {
-    expect(buildPeriodColumns(days, byDay, "cost").map((column) => column.total)).toEqual([
-      30, 0, 5,
-    ]);
+    expect(
+      buildPeriodColumns(days, byDay, "cost", PROVIDER_ORDER).map((column) => column.total),
+    ).toEqual([30, 0, 5]);
   });
 
   it("reads the requested metric", () => {
-    expect(buildPeriodColumns(days, byDay, "tokens").map((column) => column.total)).toEqual([
-      300, 0, 50,
-    ]);
+    expect(
+      buildPeriodColumns(days, byDay, "tokens", PROVIDER_ORDER).map((column) => column.total),
+    ).toEqual([300, 0, 50]);
   });
 
   it("keeps band values absolute rather than cumulative", () => {
     // Regression: the bands were once stack offsets, which drew Claude Code
     // permanently above Codex regardless of which provider spent more.
-    const [first] = buildPeriodColumns(days, byDay, "cost");
+    const [first] = buildPeriodColumns(days, byDay, "cost", PROVIDER_ORDER);
 
     expect(first?.bands).toEqual([
-      { provider: "codex", value: 10 },
-      { provider: "claude", value: 20 },
-      { provider: "grok", value: 0 },
-      { provider: "cursor", value: 0 },
-      { provider: "opencode", value: 0 },
-      { provider: "antigravity", value: 0 },
-      { provider: "pi", value: 0 },
+      { key: "codex", value: 10, costUsd: 10, estimatedCostUsd: 10 },
+      { key: "claude", value: 20, costUsd: 20, estimatedCostUsd: 0 },
+      { key: "grok", value: 0, costUsd: 0, estimatedCostUsd: 0 },
+      { key: "cursor", value: 0, costUsd: 0, estimatedCostUsd: 0 },
+      { key: "opencode", value: 0, costUsd: 0, estimatedCostUsd: 0 },
+      { key: "antigravity", value: 0, costUsd: 0, estimatedCostUsd: 0 },
+      { key: "pi", value: 0, costUsd: 0, estimatedCostUsd: 0 },
     ]);
   });
 
+  it("plots only the requested series, in their order", () => {
+    const [first] = buildPeriodColumns(days, byDay, "cost", ["claude", "codex"]);
+
+    expect(first?.bands.map((band) => band.key)).toEqual(["claude", "codex"]);
+  });
+
+  it("marks estimated cost only on the cost metric", () => {
+    const [first] = buildPeriodColumns(days, byDay, "tokens", ["codex"]);
+
+    expect(first?.bands).toEqual([{ key: "codex", value: 100, costUsd: 10, estimatedCostUsd: 0 }]);
+  });
+
   it("reports the total as the sum of its bands", () => {
-    for (const column of buildPeriodColumns(days, byDay, "cost")) {
+    for (const column of buildPeriodColumns(days, byDay, "cost", PROVIDER_ORDER)) {
       const sum = column.bands.reduce((running, band) => running + band.value, 0);
       expect(column.total).toBeCloseTo(sum, 9);
     }
   });
 });
 
-describe("providersWithUsage", () => {
+describe("seriesWithUsage", () => {
   it("omits providers with no cost or tokens", () => {
     expect(
-      providersWithUsage([
-        { provider: "codex", costUsd: 0, totalTokens: 0 },
-        { provider: "claude", costUsd: 0, totalTokens: 200 },
-      ]),
+      seriesWithUsage(
+        [
+          { key: "codex", costUsd: 0, totalTokens: 0 },
+          { key: "claude", costUsd: 0, totalTokens: 200 },
+        ],
+        "harness",
+      ).map((series) => series.key),
     ).toEqual(["claude"]);
+  });
+
+  it("orders families with unknown last and reuses harness marks where they exist", () => {
+    const series = seriesWithUsage(
+      [
+        { key: "unknown", costUsd: 1, totalTokens: 10 },
+        { key: "moonshot", costUsd: 2, totalTokens: 10 },
+        { key: "anthropic", costUsd: 3, totalTokens: 10 },
+        { key: "google", costUsd: 0, totalTokens: 0 },
+      ],
+      "family",
+    );
+
+    expect(series.map(({ key, label }) => [key, label])).toEqual([
+      ["anthropic", "Anthropic"],
+      ["moonshot", "Moonshot (Kimi)"],
+      ["unknown", "Other / unknown"],
+    ]);
+    expect(series[0]?.driverKind).toBe("claudeAgent");
+    expect(series[1]?.driverKind).toBeUndefined();
+  });
+
+  it("presents harness series exactly as the provider presentation", () => {
+    const [codex] = seriesWithUsage([{ key: "codex", costUsd: 1, totalTokens: 1 }], "harness");
+
+    expect(codex).toEqual({
+      key: "codex",
+      label: "Codex",
+      color: "var(--contrast-foreground)",
+      driverKind: "codex",
+    });
   });
 });
 
@@ -146,7 +194,9 @@ describe("hourly chart columns", () => {
           hourStart: "2026-08-11T09:37:00.000Z",
           costUsd: 4,
           totalTokens: 40,
-          byProvider: new Map([["codex" as const, { costUsd: 4, totalTokens: 40 }]]),
+          byGroup: new Map([
+            ["codex" as const, { costUsd: 4, totalTokens: 40, estimatedCostUsd: 0 }],
+          ]),
         },
       ],
     ]);
@@ -156,6 +206,7 @@ describe("hourly chart columns", () => {
         ["2026-08-11T08:37:00.000Z", "2026-08-11T09:37:00.000Z", "2026-08-11T10:37:00.000Z"],
         byHour,
         "cost",
+        PROVIDER_ORDER,
       ).map((column) => column.total),
     ).toEqual([0, 4, 0]);
   });

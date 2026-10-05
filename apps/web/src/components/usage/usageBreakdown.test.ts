@@ -16,7 +16,10 @@ const model = (
 ): ModelTotals => ({
   model: name,
   provider: "codex",
+  providers: ["codex"],
+  family: "openai",
   costUsd,
+  estimatedCostUsd: costUsd,
   totalTokens,
   tokens: {
     uncachedInputTokens: totalTokens,

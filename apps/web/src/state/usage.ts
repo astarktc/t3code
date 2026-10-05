@@ -22,7 +22,12 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback, useMemo, useState } from "react";
 
-import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
+import {
+  mergeUsage,
+  type EnvironmentUsage,
+  type MergedUsage,
+  type UsageGroupBy,
+} from "@t3tools/shared/usageMerge";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
@@ -121,6 +126,7 @@ export interface UsageView {
 export function mergeAnsweredUsage(
   environments: readonly EnvironmentUsageStatus[],
   keepBucket?: (bucket: UsageBucket) => boolean,
+  groupBy: UsageGroupBy = "harness",
 ): MergedUsage {
   const answered: EnvironmentUsage[] = environments.flatMap(({ environmentId, label, summary }) =>
     summary === null
@@ -136,7 +142,7 @@ export function mergeAnsweredUsage(
           },
         ],
   );
-  return mergeUsage(answered, USAGE_CONTRACT_VERSION);
+  return mergeUsage(answered, USAGE_CONTRACT_VERSION, groupBy);
 }
 
 const NO_HIDDEN_PROVIDERS: ReadonlySet<UsageProviderKind> = new Set();
@@ -172,6 +178,7 @@ export function useUsage(
   input: UsageSummaryInput,
   selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
   hiddenProviders: ReadonlySet<UsageProviderKind> = NO_HIDDEN_PROVIDERS,
+  groupBy: UsageGroupBy = "harness",
 ): UsageView {
   const windowKey = useMemo(
     () =>
@@ -225,8 +232,13 @@ export function useUsage(
   );
 
   const merged = useMemo(
-    () => mergeAnsweredUsage(withoutProviders(selectedEnvironments, hiddenProviders)),
-    [selectedEnvironments, hiddenProviders],
+    () =>
+      mergeAnsweredUsage(
+        withoutProviders(selectedEnvironments, hiddenProviders),
+        undefined,
+        groupBy,
+      ),
+    [selectedEnvironments, hiddenProviders, groupBy],
   );
 
   const answeredCount = selectedEnvironments.filter(
@@ -243,6 +255,7 @@ export function useUsage(
     | (NonNullable<UsageView["shown"]> & {
         readonly selection: typeof selectedEnvironmentIds;
         readonly hidden: typeof hiddenProviders;
+        readonly groupBy: UsageGroupBy;
       })
     | null
   >(null);
@@ -251,18 +264,22 @@ export function useUsage(
     (lastAnswered?.merged !== merged ||
       lastAnswered.window !== input ||
       lastAnswered.selection !== selectedEnvironmentIds ||
-      lastAnswered.hidden !== hiddenProviders)
+      lastAnswered.hidden !== hiddenProviders ||
+      lastAnswered.groupBy !== groupBy)
   ) {
     setLastAnswered({
       window: input,
       merged,
       selection: selectedEnvironmentIds,
       hidden: hiddenProviders,
+      groupBy,
     });
   }
-  // Kept usage only stands in for the same environments and provider filter.
+  // Kept usage only stands in for the same environments, provider filter and grouping.
   const kept =
-    lastAnswered?.selection === selectedEnvironmentIds && lastAnswered.hidden === hiddenProviders
+    lastAnswered?.selection === selectedEnvironmentIds &&
+    lastAnswered.hidden === hiddenProviders &&
+    lastAnswered.groupBy === groupBy
       ? lastAnswered
       : null;
   // With no answers, even failed ones keep the last answered usage on screen.

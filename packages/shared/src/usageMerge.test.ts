@@ -10,7 +10,12 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import { isModelCostUnknown, mergeUsage, type EnvironmentUsage } from "./usageMerge.ts";
+import {
+  estimatedCostShare,
+  isModelCostUnknown,
+  mergeUsage,
+  type EnvironmentUsage,
+} from "./usageMerge.ts";
 
 const decodeSummary = Schema.decodeUnknownSync(UsageSummary);
 const encodeSummary = Schema.encodeSync(UsageSummary);
@@ -105,9 +110,7 @@ describe("mergeUsage", () => {
       ],
       USAGE_CONTRACT_VERSION,
     );
-    expect(
-      merged.providers.map((provider) => [provider.provider, provider.costUsd]).sort(),
-    ).toEqual([
+    expect(merged.groups.map((group) => [group.key, group.costUsd]).sort()).toEqual([
       ["cursor", 10],
       ["opencode", 10],
     ]);
@@ -174,16 +177,12 @@ describe("mergeUsage", () => {
 
     // env-b's claude bucket is dropped, its codex bucket survives.
     expect(merged.costUsd).toBe(14);
-    expect(merged.providers.map((provider) => provider.provider).sort()).toEqual([
-      "claude",
-      "codex",
-    ]);
+    expect(merged.groups.map((group) => group.key).sort()).toEqual(["claude", "codex"]);
     expect(merged.sessions).toBe(2);
-    expect(
-      Object.fromEntries(
-        merged.providers.map((provider) => [provider.provider, provider.sessions]),
-      ),
-    ).toEqual({ claude: 1, codex: 1 });
+    expect(Object.fromEntries(merged.groups.map((group) => [group.key, group.sessions]))).toEqual({
+      claude: 1,
+      codex: 1,
+    });
   });
 
   it("counts overlapping provider roots once while keeping each environment's unique root", () => {
@@ -508,8 +507,8 @@ describe("mergeUsage", () => {
       USAGE_CONTRACT_VERSION,
     );
 
-    expect(merged.providers[0]?.provider).toBe("claude");
-    expect(merged.providers[0]?.costShare).toBeCloseTo(0.75, 5);
+    expect(merged.groups[0]?.key).toBe("claude");
+    expect(merged.groups[0]?.costShare).toBeCloseTo(0.75, 5);
     expect(merged.costQuality.unpricedShare).toBeCloseTo(0.5, 5);
     expect(merged.costQuality.cacheSavingsUsd).toBe(4);
   });
@@ -727,7 +726,7 @@ describe("mergeUsage", () => {
     );
 
     expect(merged.sessions).toBe(1);
-    expect(merged.providers[0]?.sessions).toBe(1);
+    expect(merged.groups[0]?.sessions).toBe(1);
   });
 
   it("returns empty totals with no environments", () => {
@@ -758,7 +757,7 @@ describe("mergeUsage", () => {
       USAGE_CONTRACT_VERSION,
     );
 
-    expect(merged.providers).toEqual([]);
+    expect(merged.groups).toEqual([]);
   });
 
   it("derives hourly totals without losing the daily rollup", () => {
@@ -784,5 +783,145 @@ describe("mergeUsage", () => {
     ]);
     expect(merged.daily).toHaveLength(1);
     expect(merged.daily[0]?.costUsd).toBe(10);
+  });
+});
+
+describe("mergeUsage grouped by model family", () => {
+  const sources = [
+    { provider: "claude" as const, hostId: "mac", homePath: "/a/.claude", distinctSessions: 3 },
+    { provider: "codex" as const, hostId: "mac", homePath: "/a/.codex", distinctSessions: 2 },
+    { provider: "pi" as const, hostId: "mac", homePath: "/a/.pi/agent", distinctSessions: 4 },
+  ];
+  const buckets = [
+    bucket({ provider: "claude", model: "claude-opus-5-5", costUsd: 30, records: 3 }),
+    bucket({
+      provider: "pi",
+      model: "claude-opus-5-5",
+      costUsd: 10,
+      records: 2,
+      costSource: "providerReported",
+    }),
+    bucket({ provider: "codex", model: "gpt-6-1-sol", costUsd: 20, records: 4 }),
+    bucket({
+      provider: "pi",
+      model: "kimi-k3",
+      costUsd: 5,
+      records: 1,
+      costSource: "providerReported",
+      hourStart: "2026-08-07T09:00:00.000Z",
+    }),
+  ];
+  const environments = [environment("env-a", summary(buckets, sources))];
+
+  it("re-keys rows by the family of each model, across harnesses", () => {
+    const merged = mergeUsage(environments, USAGE_CONTRACT_VERSION, "family");
+
+    expect(merged.groups.map((group) => [group.key, group.costUsd, group.records])).toEqual([
+      ["anthropic", 40, 5],
+      ["openai", 20, 4],
+      ["moonshot", 5, 1],
+    ]);
+    expect(merged.groups[0]?.costShare).toBeCloseTo(40 / 65, 5);
+  });
+
+  it("leaves session counts out of family rows, since a session can span families", () => {
+    const merged = mergeUsage(environments, USAGE_CONTRACT_VERSION, "family");
+
+    for (const group of merged.groups) expect(group.sessions).toBeUndefined();
+    // The grand total is per directory and stays correct.
+    expect(merged.sessions).toBe(9);
+  });
+
+  it("separates cost priced from model rates from reported cost", () => {
+    const merged = mergeUsage(environments, USAGE_CONTRACT_VERSION, "family");
+    const byKey = new Map(merged.groups.map((group) => [group.key, group]));
+
+    expect(byKey.get("anthropic")?.estimatedCostUsd).toBe(30);
+    expect(byKey.get("openai")?.estimatedCostUsd).toBe(20);
+    expect(byKey.get("moonshot")?.estimatedCostUsd).toBe(0);
+    expect(merged.daily[0]?.byGroup.get("anthropic")).toEqual({
+      costUsd: 40,
+      totalTokens: 2320,
+      estimatedCostUsd: 30,
+    });
+  });
+
+  it("keys the daily and hourly series by family", () => {
+    const merged = mergeUsage(environments, USAGE_CONTRACT_VERSION, "family");
+
+    expect([...(merged.daily[0]?.byGroup.keys() ?? [])].sort()).toEqual([
+      "anthropic",
+      "moonshot",
+      "openai",
+    ]);
+    expect([...(merged.hourly[0]?.byGroup.keys() ?? [])]).toEqual(["moonshot"]);
+  });
+
+  it("merges one model's rows across the harnesses that ran it", () => {
+    const merged = mergeUsage(environments, USAGE_CONTRACT_VERSION, "family");
+    const opus = merged.models.filter((model) => model.model === "claude-opus-5-5");
+
+    expect(opus).toHaveLength(1);
+    expect(opus[0]).toMatchObject({
+      family: "anthropic",
+      provider: "claude",
+      providers: ["claude", "pi"],
+      costUsd: 40,
+      estimatedCostUsd: 30,
+      records: 5,
+    });
+  });
+
+  it("keeps per-harness rows, sessions and model rows when grouped by harness", () => {
+    const merged = mergeUsage(environments, USAGE_CONTRACT_VERSION);
+
+    expect(
+      merged.groups.map((group) => [group.key, group.costUsd, group.sessions, group.records]),
+    ).toEqual([
+      ["claude", 30, 3, 3],
+      ["codex", 20, 2, 4],
+      ["pi", 15, 4, 3],
+    ]);
+    expect(
+      merged.models.map((model) => [model.provider, model.model, model.providers]).sort(),
+    ).toEqual([
+      ["claude", "claude-opus-5-5", ["claude"]],
+      ["codex", "gpt-6-1-sol", ["codex"]],
+      ["pi", "claude-opus-5-5", ["pi"]],
+      ["pi", "kimi-k3", ["pi"]],
+    ]);
+    expect([...(merged.daily[0]?.byGroup.keys() ?? [])].sort()).toEqual(["claude", "codex", "pi"]);
+  });
+
+  it("does not change the grand totals", () => {
+    const byHarness = mergeUsage(environments, USAGE_CONTRACT_VERSION, "harness");
+    const byFamily = mergeUsage(environments, USAGE_CONTRACT_VERSION, "family");
+
+    expect(byFamily.costUsd).toBe(byHarness.costUsd);
+    expect(byFamily.totalTokens).toBe(byHarness.totalTokens);
+    expect(byFamily.records).toBe(byHarness.records);
+    expect(byFamily.categoryCost).toEqual(byHarness.categoryCost);
+    expect(byFamily.speedCost).toEqual(byHarness.speedCost);
+    expect(byFamily.costQuality).toEqual(byHarness.costQuality);
+  });
+});
+
+describe("estimatedCostShare", () => {
+  it("returns the estimated share once it reaches 1% of the cost", () => {
+    expect(estimatedCostShare(100, 1)).toBe(0.01);
+    expect(estimatedCostShare(100, 40)).toBe(0.4);
+    expect(estimatedCostShare(10, 10)).toBe(1);
+  });
+
+  it("does not mark a sliver of rate-priced cost beside reported cost", () => {
+    // e.g. $0.32 priced from rates inside a $2,601 row of reported cost.
+    expect(estimatedCostShare(2601.73, 0.32)).toBeNull();
+    expect(estimatedCostShare(100, 0.99)).toBeNull();
+  });
+
+  it("returns null without cost or estimated cost", () => {
+    expect(estimatedCostShare(0, 0)).toBeNull();
+    expect(estimatedCostShare(0, 5)).toBeNull();
+    expect(estimatedCostShare(100, 0)).toBeNull();
   });
 });

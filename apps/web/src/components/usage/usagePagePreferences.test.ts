@@ -54,6 +54,25 @@ describe("Usage page preferences", () => {
     expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 7 });
   });
 
+  it("defaults to grouping by harness when stored preferences predate grouping", () => {
+    values.set(key, '{"metric":"tokens","windowDays":7}');
+    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 7 });
+  });
+
+  it("round-trips grouping by model family", () => {
+    saveUsagePagePreferences({ metric: "cost", windowDays: 30, groupBy: "family" });
+    expect(readUsagePagePreferences()).toEqual({
+      metric: "cost",
+      windowDays: 30,
+      groupBy: "family",
+    });
+  });
+
+  it("replaces an unknown grouping on the next save", () => {
+    values.set(key, '{"metric":"cost","windowDays":7,"groupBy":"vendor"}');
+    expect(readUsagePagePreferences()).toEqual({ metric: "limits", windowDays: 30 });
+  });
+
   it("contains write failures and can save again after storage recovers", () => {
     saveUsagePagePreferences({ metric: "cost", windowDays: 30 });
     const write = vi.spyOn(storage, "setItem").mockImplementation(() => {
