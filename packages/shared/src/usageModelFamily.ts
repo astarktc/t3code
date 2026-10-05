@@ -63,7 +63,11 @@ const VENDOR_SEGMENTS: ReadonlyMap<string, ModelFamily> = new Map([
   ["xai", "xai"],
 ]);
 
-/** Family tokens, matched at the start of the id or after a separator. */
+/**
+ * Family tokens, matched as whole words: at the start of the id or after a
+ * separator, and followed by its end, a separator or a version digit
+ * (`qwen3`, `gpt4o`), so `museum` and `mimosa` stay unknown.
+ */
 const FAMILY_TOKENS: readonly (readonly [ModelFamily, readonly string[]])[] = [
   ["anthropic", ["claude", "opus", "sonnet", "haiku", "fable"]],
   ["openai", ["gpt", "codex"]],
@@ -76,29 +80,48 @@ const FAMILY_TOKENS: readonly (readonly [ModelFamily, readonly string[]])[] = [
   ["deepseek", ["deepseek"]],
   ["xiaomi", ["mimo"]],
   ["alibaba", ["qwen", "qwq"]],
-  ["mistral", ["mistral", "mixtral", "codestral", "devstral", "magistral"]],
+  ["mistral", ["mistral", "mixtral", "codestral", "devstral", "magistral", "ministral", "pixtral"]],
 ];
 
-const BOUNDARY = "(?:^|[-_./:])";
+const SEPARATOR = "[-_./:]";
 const TOKEN_PATTERNS = FAMILY_TOKENS.map(
-  ([family, tokens]) => [family, new RegExp(`${BOUNDARY}(?:${tokens.join("|")})`)] as const,
+  ([family, tokens]) =>
+    [
+      family,
+      new RegExp(`(?<=^|${SEPARATOR})(?:${tokens.join("|")})(?=$|${SEPARATOR}|\\d)`),
+    ] as const,
 );
-/** OpenAI's o-series (o3, o4-mini) as a whole word, so `foo3` stays unknown. */
-const O_SERIES = new RegExp(`${BOUNDARY}o\\d+(?:$|[-_./:])`);
-const REGION_PREFIX = /^(?:global|us|eu)\./;
+/** OpenAI's o-series (o3, o4-mini) as a whole word, so `foo3` and `o3x` stay unknown. */
+const O_SERIES = new RegExp(`(?<=^|${SEPARATOR})o\\d+(?=$|${SEPARATOR})`);
 const BRACKET_VARIANT = /\[[^\]]*\]/g;
 
-export function modelFamily(model: string): ModelFamily {
-  const id = model.trim().toLowerCase().replace(BRACKET_VARIANT, "").replace(REGION_PREFIX, "");
+/** Where `pattern` first matches in `id`, or `Infinity`. */
+function matchIndex(pattern: RegExp, id: string): number {
+  return pattern.exec(id)?.index ?? Number.POSITIVE_INFINITY;
+}
 
+export function modelFamily(model: string): ModelFamily {
+  const id = model.trim().toLowerCase().replace(BRACKET_VARIANT, "");
+
+  // Region prefixes such as `us.` fall away here as segments of their own.
   for (const segment of id.split(/[/.]/)) {
     const family = VENDOR_SEGMENTS.get(segment);
     if (family !== undefined) return family;
   }
 
+  // The earliest token names the model: `deepseek-r1-distill-llama` is
+  // DeepSeek's. Ties keep declaration order.
+  let best: ModelFamily = "unknown";
+  let bestIndex = Number.POSITIVE_INFINITY;
   for (const [family, pattern] of TOKEN_PATTERNS) {
-    if (pattern.test(id)) return family;
-    if (family === "openai" && O_SERIES.test(id)) return family;
+    const index =
+      family === "openai"
+        ? Math.min(matchIndex(pattern, id), matchIndex(O_SERIES, id))
+        : matchIndex(pattern, id);
+    if (index < bestIndex) {
+      best = family;
+      bestIndex = index;
+    }
   }
-  return "unknown";
+  return best;
 }

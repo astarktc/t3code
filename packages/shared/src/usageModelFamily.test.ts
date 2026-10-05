@@ -35,8 +35,32 @@ describe("modelFamily", () => {
     ["devstral-medium", "mistral"],
     ["magistral-small", "mistral"],
     ["mistral-large-3", "mistral"],
+    ["ministral-8b", "mistral"],
+    ["pixtral-large", "mistral"],
   ] as const)("matches the family token in %s", (model, family) => {
     expect(modelFamily(model)).toBe(family);
+  });
+
+  it.each([
+    ["qwen3", "alibaba"],
+    ["gpt4o", "openai"],
+    ["glm4", "zai"],
+    ["llama3", "meta"],
+    ["o3", "openai"],
+  ] as const)("accepts a version digit right after the token in %s", (model, family) => {
+    expect(modelFamily(model)).toBe(family);
+  });
+
+  it.each(["museum-7b", "mimosa", "glmatrix", "codextra"])(
+    "does not match a token that merely starts the word %s",
+    (model) => {
+      expect(modelFamily(model)).toBe("unknown");
+    },
+  );
+
+  it("picks the family whose token appears first in the id", () => {
+    expect(modelFamily("deepseek-r1-distill-llama-70b")).toBe("deepseek");
+    expect(modelFamily("llama-3-gpt-distill")).toBe("meta");
   });
 
   it("ignores case, bracket variants and region prefixes", () => {
