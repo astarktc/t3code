@@ -1,14 +1,16 @@
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import type {
-  DailyTotals,
-  HourlyTotals,
-  UsageGroupBy,
-  UsageGroupKey,
+import {
+  estimatedCostShare,
+  type DailyTotals,
+  type HourlyTotals,
+  type UsageGroupBy,
+  type UsageGroupKey,
 } from "@t3tools/shared/usageMerge";
 import {
   formatDayShort,
+  formatEstimateShare,
   formatHourShort,
   formatRelativeHourShort,
   formatTokens,
@@ -16,7 +18,6 @@ import {
 } from "@t3tools/shared/usageFormat";
 import { cn } from "~/lib/utils";
 import { observeResize } from "~/lib/observeResize";
-import { EstimateMark } from "./UsageEstimateMark";
 import type { UsageSeries } from "./usageProviders";
 
 const VIEW_WIDTH = 960;
@@ -474,7 +475,7 @@ export function UsageProviderChart({
                       )}
                     >
                       {groupBy === "family" && band !== undefined ? (
-                        <EstimateMark
+                        <EstimateShareText
                           costUsd={band.costUsd}
                           estimatedCostUsd={band.estimatedCostUsd}
                         />
@@ -514,5 +515,23 @@ export function UsageProviderChart({
         </span>
       </div>
     </div>
+  );
+}
+
+/**
+ * The readout cannot take pointer events, so a tooltip mark could never open
+ * there; it states the estimated share inline instead.
+ */
+function EstimateShareText({
+  costUsd,
+  estimatedCostUsd,
+}: {
+  readonly costUsd: number;
+  readonly estimatedCostUsd: number;
+}) {
+  const share = estimatedCostShare(costUsd, estimatedCostUsd);
+  if (share === null) return null;
+  return (
+    <span className="me-1.5 text-muted-foreground">{`≈ ${formatEstimateShare(share)} est.`}</span>
   );
 }

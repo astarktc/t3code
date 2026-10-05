@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   enumerateHourStarts,
   formatDateTimeShort,
+  formatEstimateShare,
   formatHourShort,
   formatPercent,
   formatRelativeHourShort,
@@ -18,6 +19,15 @@ describe("formatPercent", () => {
     expect(formatPercent(0.001)).toBe("0.1%");
     expect(formatPercent(0.023)).toBe("2.3%");
     expect(formatPercent(0.00004, 2)).toBe("<0.01%");
+  });
+});
+
+describe("formatEstimateShare", () => {
+  it("rounds the estimated share to a whole percent", () => {
+    expect(formatEstimateShare(0.01)).toBe("1%");
+    expect(formatEstimateShare(0.404)).toBe("40%");
+    expect(formatEstimateShare(0.994)).toBe("99%");
+    expect(formatEstimateShare(0.996)).toBe("100%");
   });
 });
 

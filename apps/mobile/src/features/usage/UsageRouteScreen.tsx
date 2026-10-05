@@ -17,10 +17,12 @@ import {
   type UsageGroupBy,
 } from "@t3tools/shared/usageMerge";
 import {
+  ESTIMATE_FOOTNOTE,
   enumerateDays,
   enumerateHourStarts,
   formatCount,
   formatDayShort,
+  formatEstimateShare,
   formatHourShort,
   formatPercent,
   formatTokens,
@@ -92,7 +94,12 @@ const GROUP_BY_OPTIONS = [
 
 /** Prefixes cost that includes usage priced from model rates, grouped by family. */
 const ESTIMATE_MARK = "≈";
-const ESTIMATE_FOOTNOTE = "≈ API estimate from model rates";
+
+/** The estimated share of a row's cost as a trailing detail, or "" when unmarked. */
+function estimateDetail(costUsd: number, estimatedCostUsd: number): string {
+  const share = estimatedCostShare(costUsd, estimatedCostUsd);
+  return share === null ? "" : ` · ${ESTIMATE_MARK} ${formatEstimateShare(share)} estimated`;
+}
 
 const CHART_HEIGHT = 180;
 const providerLabel = (provider: UsageProviderKind) => PROVIDER_LABEL[provider];
@@ -757,9 +764,12 @@ function GroupSection(props: {
               {metric === "cost"
                 ? `${formatPercent(share)} of cost · ${formatTokens(group.totalTokens)} tokens`
                 : `${formatPercent(share)} of tokens · ${cost}`}
-              {/* Family rows count responses: a session can span families. */}
+              {/* Family rows count API requests: a session can span families. */}
               {byFamily
-                ? ` · ${formatCount(group.records)} ${group.records === 1 ? "response" : "responses"}`
+                ? ` · ${formatCount(group.records)} ${group.records === 1 ? "request" : "requests"}${estimateDetail(
+                    group.costUsd,
+                    group.estimatedCostUsd,
+                  )}`
                 : ""}
             </Text>
           </View>
@@ -975,6 +985,7 @@ function ModelsSection(props: {
                   : isModelCostUnknown(model)
                     ? `no known rates · ${formatTokens(model.totalTokens)} tokens`
                     : `${formatPercent(model.costShare)} of cost · ${formatTokens(model.totalTokens)} tokens`}
+                {byFamily ? estimateDetail(model.costUsd, model.estimatedCostUsd) : ""}
               </Text>
             </View>
             <Text className="text-base tabular-nums text-foreground">

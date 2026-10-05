@@ -42,6 +42,7 @@ import { shortcutLabelForCommand } from "../../keybindings";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
+  ESTIMATE_FOOTNOTE,
   enumerateDays,
   enumerateHourStarts,
   formatCount,
@@ -92,6 +93,7 @@ import {
   tokenTypeSegments,
 } from "./usageBreakdown";
 import {
+  GROUP_BY_OPTIONS,
   METRIC_OPTIONS,
   WINDOW_OPTIONS,
   resolveUsageShortcut,
@@ -106,7 +108,7 @@ import {
   seriesWithUsage,
   type UsageSeries,
 } from "./usageProviders";
-import { ESTIMATE_FOOTNOTE, EstimateMark } from "./UsageEstimateMark";
+import { EstimateMark } from "./UsageEstimateMark";
 import {
   readUsagePagePreferences,
   saveUsagePagePreferences,
@@ -123,11 +125,6 @@ function isUsageWindowDays(value: number): value is UsagePagePreferences["window
 
 const providerLabel = (provider: UsageProviderKind) => PROVIDER_PRESENTATION[provider].label;
 
-const GROUP_BY_OPTIONS = [
-  { value: "harness", label: "Harness", title: "Group by harness" },
-  { value: "family", label: "Model family", title: "Group by model family" },
-] as const satisfies readonly { value: UsageGroupBy; label: string; title: string }[];
-
 function isUsageGroupBy(value: string | null | undefined): value is UsageGroupBy {
   return GROUP_BY_OPTIONS.some((option) => option.value === value);
 }
@@ -142,12 +139,16 @@ export function UsagePage() {
   useEscapeToGoBack();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const shortcutTitle = (
-    option: (typeof METRIC_OPTIONS)[number] | (typeof WINDOW_OPTIONS)[number],
+    option:
+      | (typeof GROUP_BY_OPTIONS)[number]
+      | (typeof METRIC_OPTIONS)[number]
+      | (typeof WINDOW_OPTIONS)[number],
   ) => {
+    const label = "title" in option ? option.title : option.label;
     const shortcut = shortcutLabelForCommand(keybindings, option.command, {
       context: { usagePageOpen: true },
     });
-    return shortcut ? `${option.label} (${shortcut})` : option.label;
+    return shortcut ? `${label} (${shortcut})` : label;
   };
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: preferences.windowDays,
@@ -371,12 +372,14 @@ export function UsagePage() {
     const command = resolveUsageShortcut(event, keybindings);
     const metricOption = METRIC_OPTIONS.find((option) => option.command === command);
     const periodOption = WINDOW_OPTIONS.find((option) => option.command === command);
-    if (!metricOption && !periodOption) return;
+    const groupOption = GROUP_BY_OPTIONS.find((option) => option.command === command);
+    if (!metricOption && !periodOption && !groupOption) return;
 
     event.preventDefault();
     event.stopPropagation();
     if (metricOption) selectMetric(metricOption.value);
     if (periodOption && !showingLimits) selectWindow(periodOption.days);
+    if (groupOption && !showingLimits) selectGroupBy(groupOption.value);
   });
 
   useEffect(() => {
@@ -481,7 +484,7 @@ export function UsagePage() {
           }}
         >
           {GROUP_BY_OPTIONS.map((option) => (
-            <Toggle key={option.value} value={option.value} title={option.title}>
+            <Toggle key={option.value} value={option.value} title={shortcutTitle(option)}>
               {option.label}
             </Toggle>
           ))}
@@ -551,7 +554,7 @@ export function UsagePage() {
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
             {GROUP_BY_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
+              <SelectItem key={option.value} value={option.value} title={shortcutTitle(option)}>
                 {option.title}
               </SelectItem>
             ))}
@@ -745,13 +748,13 @@ export function UsagePage() {
                       const totals = merged.groups.find((entry) => entry.key === series.key);
                       const share =
                         metric === "cost" ? (totals?.costShare ?? 0) : (totals?.tokenShare ?? 0);
-                      // Family rows count responses: a session can span families.
+                      // Family rows count API requests: a session can span families.
                       const count = byFamily ? (totals?.records ?? 0) : (totals?.sessions ?? 0);
                       const countLabel = `${formatCount(count)} ${
                         byFamily
                           ? count === 1
-                            ? "response"
-                            : "responses"
+                            ? "request"
+                            : "requests"
                           : count === 1
                             ? "session"
                             : "sessions"
@@ -770,15 +773,19 @@ export function UsagePage() {
                               <SeriesMark series={series} className="size-4" />
                               <span className="flex min-w-0 items-baseline gap-1.5">
                                 <span className="truncate">{series.label}</span>
-                                <span
-                                  className={cn(
-                                    "shrink-0 whitespace-nowrap text-2xs text-muted-foreground tabular-nums",
-                                    figureClass(seriesLoading),
-                                    awaitingData && "invisible",
-                                  )}
-                                >
-                                  {countLabel}
-                                </span>
+                                {/* Family labels and request counts run longer, so the
+                                    count moves to the detail line to keep the label whole. */}
+                                {byFamily ? null : (
+                                  <span
+                                    className={cn(
+                                      "shrink-0 whitespace-nowrap text-2xs text-muted-foreground tabular-nums",
+                                      figureClass(seriesLoading),
+                                      awaitingData && "invisible",
+                                    )}
+                                  >
+                                    {countLabel}
+                                  </span>
+                                )}
                               </span>
                             </span>
                             <span
@@ -813,7 +820,7 @@ export function UsagePage() {
                             )}
                           >
                             {metric === "cost" ? (
-                              `${formatPercent(share)} of cost · ${formatTokens(totals?.totalTokens ?? 0)} tokens`
+                              `${formatPercent(share)} of cost · ${formatTokens(totals?.totalTokens ?? 0)} tokens${byFamily ? ` · ${countLabel}` : ""}`
                             ) : (
                               <>
                                 {`${formatPercent(share)} of tokens · `}
@@ -824,6 +831,7 @@ export function UsagePage() {
                                   />
                                 ) : null}
                                 {formatUsd(totals?.costUsd ?? 0)}
+                                {byFamily ? ` · ${countLabel}` : null}
                               </>
                             )}
                           </span>

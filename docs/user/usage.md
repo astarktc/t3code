@@ -17,8 +17,9 @@ Totals depend on the history available on each server. Grok turns without a save
 record are missing from the totals.
 
 Pi reads session transcripts from its agent directory, `~/.pi/agent` unless `PI_CODING_AGENT_DIR` is
-set. Pi records a cost for each response, so its cost is the cost Pi reported rather than one computed
-from model rates. Pi turns count once under **Pi**, whichever model provider served them.
+set. Pi records a cost for each request, so its cost is the cost Pi reported rather than one computed
+from model rates; requests Pi recorded no cost for are priced from model rates. Pi turns count once
+under **Pi**, whichever model provider served them.
 
 OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
 databases, including T3-managed profiles. Set `OPENCODE_DATA_DIR` or `ANTIGRAVITY_DATA_DIR` on the
@@ -55,7 +56,7 @@ On web and desktop, use **Group by** in the Usage header to switch the per-row l
 hourly chart, and the **Breakdown → Day** or **Hour** table between **Harness**, the agent that ran
 the work, and **Model family**, the vendor that made the model. The mobile app has the same switch
 under the period and metric controls. Totals and the cost and token mixes are the same in both
-views. Grouped by model family, rows count responses instead of sessions, because one session can
+views. Grouped by model family, rows count API requests instead of sessions, because one session can
 use models from several families. **Breakdown → Model** shows one row per model across every
 harness that ran it, with the harness icons beside it. Costs marked **≈** include an API estimate
 from model rates, while the rest is cost the harness reported.
@@ -161,7 +162,8 @@ Session, Weekly, or both for each provider. Reopen T3 to refresh expired reading
 
 On web and desktop, open Usage from the command palette. While on Usage,
 press `C`, `T`, or `L` for Cost, Tokens, or Limits while not typing in a field.
+Press `H` or `F` to group by harness or model family.
 Use `Ctrl+Shift+1/2/3/4` (`Cmd+Shift+1/2/3/4` on macOS) for the past
-24 hours, 7 days, 30 days, or 90 days. Period shortcuts do nothing on Limits.
+24 hours, 7 days, 30 days, or 90 days. Group and period shortcuts do nothing on Limits.
 Press `Escape` to return to the previous page. Customize these shortcuts in
 **Settings → Keybindings**.

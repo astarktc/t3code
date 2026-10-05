@@ -1,6 +1,27 @@
 import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { UsageGroupBy } from "@t3tools/shared/usageMerge";
 import type { UsageChartMetric } from "./UsageProviderChart";
 import { resolveShortcutCommand, type ShortcutEventLike } from "../../keybindings";
+
+export const GROUP_BY_OPTIONS = [
+  {
+    value: "harness",
+    label: "Harness",
+    title: "Group by harness",
+    command: "usage.group.harness",
+  },
+  {
+    value: "family",
+    label: "Model family",
+    title: "Group by model family",
+    command: "usage.group.family",
+  },
+] as const satisfies readonly {
+  value: UsageGroupBy;
+  label: string;
+  title: string;
+  command: KeybindingCommand;
+}[];
 
 export type UsageMetric = UsageChartMetric | "limits";
 export const METRIC_OPTIONS = [

@@ -51,6 +51,15 @@ export function formatPercent(share: number, digits = 1): string {
   return `${percent.toFixed(digits)}%`;
 }
 
+/** Explains the ≈ that marks a cost partly priced from model rates. */
+export const ESTIMATE_FOOTNOTE = "≈ API estimate from model rates";
+
+/** The share of a cost priced from model rates, as a whole percent. */
+export function formatEstimateShare(share: number): string {
+  if (share >= 0.995) return "100%";
+  return `${Math.round(share * 100)}%`;
+}
+
 export function formatUsageContractMismatch(
   environmentLabel: string,
   mismatch: Pick<UsageContractMismatch, "direction">,

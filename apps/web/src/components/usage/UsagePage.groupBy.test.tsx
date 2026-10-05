@@ -160,11 +160,11 @@ describe("UsagePage grouping", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("Claude Code");
     expect(text).toContain("3 sessions");
-    expect(text).not.toContain("responses");
+    expect(text).not.toContain("requests");
     expect(text).not.toContain("API estimate from model rates");
   });
 
-  it("re-keys rows by model family with response counts and marked estimates", async () => {
+  it("re-keys rows by model family with request counts and marked estimates", async () => {
     await render("family");
 
     expect(testState.useUsage).toHaveBeenLastCalledWith(
@@ -175,9 +175,9 @@ describe("UsagePage grouping", () => {
     );
     const text = container.textContent ?? "";
     expect(text).toContain("Anthropic");
-    expect(text).toContain("4 responses");
+    expect(text).toContain("4 requests");
     expect(text).toContain("OpenAI");
-    expect(text).toContain("1 response");
+    expect(text).toContain("1 request");
     expect(text).not.toContain("3 sessions");
     expect(text).toContain("≈ API estimate from model rates");
     // The tooltip label states the estimated share of each marked cost.

@@ -1,9 +1,7 @@
+import { formatEstimateShare } from "@t3tools/shared/usageFormat";
 import { estimatedCostShare } from "@t3tools/shared/usageMerge";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-
-/** Copy for the footnote that explains {@link EstimateMark}. */
-export const ESTIMATE_FOOTNOTE = "≈ API estimate from model rates";
 
 /**
  * Prefixes a cost when at least 1% of it was priced from model rates rather
@@ -32,9 +30,4 @@ export function EstimateMark({
       <TooltipPopup side="top">{label}</TooltipPopup>
     </Tooltip>
   );
-}
-
-function formatEstimateShare(share: number): string {
-  if (share >= 0.995) return "100%";
-  return `${Math.round(share * 100)}%`;
 }

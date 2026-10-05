@@ -39,7 +39,10 @@ export interface GroupTotals {
   readonly key: UsageGroupKey;
   readonly costUsd: number;
   readonly totalTokens: number;
-  /** Distinct assistant responses. */
+  /**
+   * Distinct API requests: assistant responses plus requests such as cache
+   * warming and compaction that some harnesses record.
+   */
   readonly records: number;
   /**
    * Distinct sessions, only when grouped by harness. A session can use models
