@@ -89,7 +89,7 @@ const METRIC_OPTIONS = [
 
 const GROUP_BY_OPTIONS = [
   { value: "harness", label: "Harness", accessibilityLabel: "Group by harness" },
-  { value: "family", label: "Model family", accessibilityLabel: "Group by model family" },
+  { value: "family", label: "Model", accessibilityLabel: "Group by model" },
 ] as const satisfies readonly { value: UsageGroupBy; label: string; accessibilityLabel: string }[];
 
 /** Prefixes cost that includes usage priced from model rates, grouped by family. */

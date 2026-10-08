@@ -12,8 +12,8 @@ export const GROUP_BY_OPTIONS = [
   },
   {
     value: "family",
-    label: "Model family",
-    title: "Group by model family",
+    label: "Model",
+    title: "Group by model",
     command: "usage.group.family",
   },
 ] as const satisfies readonly {

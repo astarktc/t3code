@@ -1637,7 +1637,7 @@ describe("composer and pull request shortcuts", () => {
 describe("Usage shortcuts", () => {
   it.each([
     ["h", "usage.group.harness"],
-    ["f", "usage.group.family"],
+    ["m", "usage.group.family"],
   ] as const)("groups usage with %s on Usage", (key, command) => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key }), DEFAULT_RESOLVED_KEYBINDINGS, {

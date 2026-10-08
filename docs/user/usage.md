@@ -50,14 +50,14 @@ saved totals first, then updates them when Cursor's API responds.
 If recent work is missing or a new model shows no cost, refresh to rescan session history and
 update model pricing.
 
-## Group by harness or model family
+## Group by harness or model
 
 On web and desktop, use **Group by** in the Usage header to switch the per-row list, the daily or
 hourly chart, and the **Breakdown → Day** or **Hour** table between **Harness**, the agent that ran
-the work, and **Model family**, the vendor that made the model. The mobile app has the same switch
+the work, and **Model**, the vendor that made the model. The mobile app has the same switch
 under the period and metric controls. Totals and the cost and token mixes are the same in both
-views. Grouped by model family, rows count API requests instead of sessions, because one session can
-use models from several families. **Breakdown → Model** shows one row per model across every
+views. Grouped by model, rows count API requests instead of sessions, because one session can
+use models from several vendors. **Breakdown → Model** shows one row per model across every
 harness that ran it, with the harness icons beside it. Costs marked **≈** include an API estimate
 from model rates, while the rest is cost the harness reported.
 
@@ -162,7 +162,7 @@ Session, Weekly, or both for each provider. Reopen T3 to refresh expired reading
 
 On web and desktop, open Usage from the command palette. While on Usage,
 press `C`, `T`, or `L` for Cost, Tokens, or Limits while not typing in a field.
-Press `H` or `F` to group by harness or model family.
+Press `H` or `M` to group by harness or model.
 Use `Ctrl+Shift+1/2/3/4` (`Cmd+Shift+1/2/3/4` on macOS) for the past
 24 hours, 7 days, 30 days, or 90 days. Group and period shortcuts do nothing on Limits.
 Press `Escape` to return to the previous page. Customize these shortcuts in
