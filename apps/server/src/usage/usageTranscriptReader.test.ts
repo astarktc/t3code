@@ -69,7 +69,114 @@ function codexUsageLine(outputTokens: number, secondsOffset: number): string {
   })}\n`;
 }
 
+function piSessionLine(): string {
+  return `${JSON.stringify({
+    type: "session",
+    version: 3,
+    id: "pi-session-1",
+    timestamp: "2026-08-01T10:00:00Z",
+  })}\n`;
+}
+
+function piModelChangeLine(modelId: string): string {
+  return `${JSON.stringify({
+    type: "model_change",
+    id: "mc_1",
+    timestamp: "2026-08-01T10:00:01Z",
+    provider: "anthropic",
+    modelId,
+  })}\n`;
+}
+
+function piUsageLine(id: number, outputTokens: number): string {
+  return `${JSON.stringify({
+    type: "message",
+    id: `pi_msg_${id}`,
+    timestamp: "2026-08-01T10:00:05Z",
+    message: {
+      role: "assistant",
+      // No `model` of its own: attribution must come from the reducer state.
+      usage: {
+        input: 10,
+        output: outputTokens,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { total: 0.01 },
+      },
+    },
+  })}\n`;
+}
+
 describe("readTranscriptRecords resume", () => {
+  it("carries the Pi reducer state across the resume boundary", async () => {
+    const path = NodePath.join(dir, "pi-session.jsonl");
+    await NodeFSP.writeFile(path, piSessionLine() + piModelChangeLine("claude-fable-5"));
+    const first = await readTranscriptRecords(path, TEST_FORMATS.pi);
+    assert.isNotNull(first);
+    assert.strictEqual(first.records.length, 0);
+    assert.isNotNull(first.position.state);
+
+    await NodeFSP.appendFile(path, piUsageLine(1, 7));
+    const second = await readTranscriptRecords(path, TEST_FORMATS.pi, first.position);
+    assert.isNotNull(second);
+    assert.isTrue(second.resumed);
+    assert.strictEqual(second.records.length, 1);
+    assert.strictEqual(second.records[0]?.model, "claude-fable-5");
+    assert.strictEqual(second.records[0]?.sessionId, "pi-session-1");
+    assert.strictEqual(second.records[0]?.totals.outputTokens, 7);
+  });
+
+  it("projects Pi usage and reducer state from lines above the streaming threshold", async () => {
+    // Pi assistant messages embed tool output, so a single line can exceed the
+    // streaming threshold; the projected record must carry Pi's own fields.
+    const padding = "工具 output usage ".repeat(20_000);
+    const pad = (line: string) => `${JSON.stringify({ padding, ...JSON.parse(line) })}\n`;
+    const small = NodePath.join(dir, "pi-small.jsonl");
+    const large = NodePath.join(dir, "pi-large.jsonl");
+    const lines = [piSessionLine(), piModelChangeLine("claude-fable-5"), piUsageLine(1, 7)];
+    await NodeFSP.writeFile(small, lines.join(""));
+    await NodeFSP.writeFile(large, lines.map(pad).join(""));
+    const options = { streamingThresholdBytes: 64 * 1024 };
+    const expected = await readTranscriptRecords(small, TEST_FORMATS.pi, undefined, options);
+    const actual = await readTranscriptRecords(large, TEST_FORMATS.pi, undefined, options);
+    assert.isNotNull(expected);
+    assert.isNotNull(actual);
+    assert.strictEqual(expected.records.length, 1);
+    assert.deepStrictEqual(actual.records, expected.records);
+    assert.deepStrictEqual(actual.position.state, expected.position.state);
+    assert.strictEqual(actual.records[0]?.sessionId, "pi-session-1");
+    assert.strictEqual(actual.records[0]?.reportedCostUsd, 0.01);
+  });
+
+  it("projects usage from oversized Pi compaction lines", async () => {
+    // A compaction line carries the whole summary and system prompt, so it is
+    // the Pi entry most likely to cross the streaming threshold.
+    const compaction = `${JSON.stringify({
+      type: "compaction",
+      id: "c0c0c0c0",
+      timestamp: "2026-08-01T10:10:00Z",
+      summary: "summary ".repeat(20_000),
+      firstKeptEntryId: "pi_msg_1",
+      tokensBefore: 180000,
+      usage: { input: 51000, output: 2400, cacheRead: 0, cacheWrite: 0, cost: { total: 0.31 } },
+    })}\n`;
+    const path = NodePath.join(dir, "pi-compaction.jsonl");
+    await NodeFSP.writeFile(
+      path,
+      piSessionLine() + piModelChangeLine("claude-fable-5") + piUsageLine(1, 7) + compaction,
+    );
+    const options = { streamingThresholdBytes: 64 * 1024 };
+    const result = await readTranscriptRecords(path, TEST_FORMATS.pi, undefined, options);
+    assert.isNotNull(result);
+    assert.strictEqual(result.records.length + result.tailRecords.length, 2);
+    const summary = [...result.records, ...result.tailRecords].find((record) =>
+      record.dedupeKey?.startsWith("pi:c0c0c0c0:"),
+    );
+    assert.strictEqual(summary?.model, "claude-fable-5");
+    assert.strictEqual(summary?.totals.uncachedInputTokens, 51000);
+    assert.strictEqual(summary?.reportedCostUsd, 0.31);
+  });
+
   it("parses only appended lines when resuming a grown file", async () => {
     const path = NodePath.join(dir, "claude.jsonl");
     await NodeFSP.writeFile(path, claudeLine(1, 5) + claudeLine(2, 7));
