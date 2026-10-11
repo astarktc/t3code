@@ -560,4 +560,85 @@ describe("mergeUsage", () => {
     expect(merged.sessions).toBe(1);
     expect(merged.providers[0]?.sessions).toBe(1);
   });
+
+  it("groups the same usage by model family across harnesses", () => {
+    const hourStart = "2026-08-07T09:00:00.000Z";
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({ hourStart, costUsd: 10 }),
+              bucket({ hourStart, provider: "pi", model: "anthropic/claude-opus-5", costUsd: 4 }),
+              bucket({ hourStart, provider: "codex", model: "gpt-6-1-sol", costUsd: 6 }),
+              bucket({ hourStart, provider: "pi", model: "Tools/summaries", costUsd: 1 }),
+              bucket({ hourStart, provider: "muse", model: "muse-wonder-1.0", costUsd: 3 }),
+            ],
+            [
+              { provider: "claude", hostId: "mac", homePath: "/a/.claude" },
+              { provider: "codex", hostId: "mac", homePath: "/a/.codex" },
+              { provider: "pi", hostId: "mac", homePath: "/a/.pi/agent" },
+              { provider: "muse", hostId: "mac", homePath: "/a/.muse" },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    const tokens = 1160;
+    expect(merged.families).toEqual([
+      {
+        family: "anthropic",
+        costUsd: 14,
+        totalTokens: 2 * tokens,
+        records: 10,
+        costShare: 14 / 24,
+        tokenShare: 0.4,
+      },
+      {
+        family: "openai",
+        costUsd: 6,
+        totalTokens: tokens,
+        records: 5,
+        costShare: 6 / 24,
+        tokenShare: 0.2,
+      },
+      // Muse Code's buckets name Meta's Muse models, so they land in Meta.
+      {
+        family: "meta",
+        costUsd: 3,
+        totalTokens: tokens,
+        records: 5,
+        costShare: 3 / 24,
+        tokenShare: 0.2,
+      },
+      {
+        family: "unknown",
+        costUsd: 1,
+        totalTokens: tokens,
+        records: 5,
+        costShare: 1 / 24,
+        tokenShare: 0.2,
+      },
+    ]);
+    // The harness view of the same usage is unchanged.
+    expect(merged.providers.map((provider) => [provider.provider, provider.costUsd])).toEqual([
+      ["claude", 10],
+      ["codex", 6],
+      ["pi", 5],
+      ["muse", 3],
+    ]);
+    for (const period of [merged.daily[0], merged.hourly[0]]) {
+      expect(period?.byFamily).toEqual(
+        new Map([
+          ["anthropic", { costUsd: 14, totalTokens: 2 * tokens }],
+          ["openai", { costUsd: 6, totalTokens: tokens }],
+          ["meta", { costUsd: 3, totalTokens: tokens }],
+          ["unknown", { costUsd: 1, totalTokens: tokens }],
+        ]),
+      );
+    }
+  });
 });
