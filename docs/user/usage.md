@@ -3,7 +3,7 @@
 Track token usage, cache hit rates, estimated API-equivalent costs, and pooled subscription quotas across all connected environments.
 
 - **Open Usage**: Click **Usage** in the sidebar, press `mod+u` (web/desktop outside terminals), or pick **Usage** on mobile.
-- **Quick shortcuts** (web/desktop on Usage): `C` (Cost), `T` (Tokens), `L` (Limits), `mod+Shift+1/2/3/4` (24h / 7d / 30d / 90d), `Esc` (back).
+- **Quick shortcuts** (web/desktop on Usage): `C` (Cost), `T` (Tokens), `L` (Limits), `H` / `M` (group by harness / model), `mod+Shift+1/2/3/4` (24h / 7d / 30d / 90d), `Esc` (back).
 
 ## Understand your usage
 
@@ -12,6 +12,10 @@ Usage aggregates history across Codex, Claude Code, Grok Build, OpenCode, Antigr
 - **Retention**: Servers keep scanned usage history for **92 days** by default (preserving Claude history after Claude's 30-day cleanup). Change `usageHistoryRetentionDays` in `<t3-home>/userdata/settings.json` (e.g. `365` or `"unlimited"`; views show up to 90 days).
 - **Custom data directories**: Honors `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`, `PI_CODING_AGENT_DIR` / `PI_CODING_AGENT_SESSION_DIR`, `OPENCODE_DATA_DIR`, `ANTIGRAVITY_DATA_DIR`, and `XDG_DATA_HOME` (Muse). Use absolute or `~/` paths. Set `T3CODE_HOST_ID` to pin a container's host identity.
 - **Exclusions**: Codex and Claude Code 2.0.63+ text-generation runs (titles, commits, PR text, review guides) and Grok turns without a saved completed-turn record are not included.
+
+## Group by harness or model
+
+On web and desktop, **Group by** in the Usage header switches the per-row list, the chart and the **Breakdown → Day** or **Hour** table between **Harness** (the agent that ran the work) and **Model** (the vendor that made the model). Totals, the cost and token mixes and **Breakdown → Model** are the same in both views; grouped by model, rows count API requests instead of sessions. The vendor comes from the model ID: a router-style path such as `openai/` decides first, otherwise a name such as `claude`, `gpt`, `gemini`, `grok`, `kimi`, `glm`, `deepseek`, `qwen` or `mistral`; anything else, and Pi's `Tools/summaries`, shows as **Other / unknown**. A model under **Map to** takes its target's vendor.
 
 ## Custom model prices and filtering
 
