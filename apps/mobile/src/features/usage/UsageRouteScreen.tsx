@@ -166,6 +166,7 @@ function UsageScreen(props: {
         costUsd: hour.costUsd,
         totalTokens: hour.totalTokens,
         byProvider: hour.byProvider,
+        byFamily: hour.byFamily,
       }))
     : merged.daily;
 

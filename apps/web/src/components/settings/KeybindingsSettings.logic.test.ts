@@ -2,6 +2,7 @@ import { assert, describe, expect, it } from "vite-plus/test";
 import { STATIC_KEYBINDING_COMMANDS, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import {
   compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
   mergeWithDefaultKeybindings,
   parseKeybindingShortcut,
 } from "@t3tools/shared/keybindings";
@@ -11,6 +12,7 @@ import { resolveShortcutCommand } from "../../keybindings";
 
 import {
   buildKeybindingRows,
+  buildKeybindingCommandOptions,
   buildWhenVariableOptions,
   commandLabel,
   filterKeybindingRows,
@@ -54,6 +56,32 @@ describe("KeybindingsSettings.logic", () => {
       ),
     );
     expect(groups.map((group) => group.id)).toEqual(["navigation"]);
+  });
+
+  it("orders Usage bindings and command choices like the page", () => {
+    const expected = [
+      "usage.open",
+      "usage.group.harness",
+      "usage.group.family",
+      "usage.cost",
+      "usage.tokens",
+      "usage.limits",
+      "usage.period.day",
+      "usage.period.week",
+      "usage.period.month",
+      "usage.period.quarter",
+    ];
+    for (const bindings of [
+      DEFAULT_RESOLVED_KEYBINDINGS,
+      DEFAULT_RESOLVED_KEYBINDINGS.toReversed(),
+    ]) {
+      expect(
+        filterKeybindingRows(buildKeybindingRows(bindings), "usage").map((row) => row.command),
+      ).toEqual(expected);
+      expect(
+        buildKeybindingCommandOptions(bindings).filter((command) => command.startsWith("usage.")),
+      ).toEqual(expected);
+    }
   });
 
   it("keeps sibling row identities when a saved binding moves to the end", () => {

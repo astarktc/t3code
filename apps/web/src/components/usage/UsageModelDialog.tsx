@@ -23,7 +23,7 @@ import {
   speedCostSegments,
   tokenTypeSegments,
 } from "./usageBreakdown";
-import { PROVIDER_PRESENTATION } from "./usageProviders";
+import { PROVIDER_PRESENTATION, seriesFor } from "./usageProviders";
 
 export interface UsageChartWindow {
   readonly days: readonly string[];
@@ -55,7 +55,7 @@ export function UsageModelDialog({
     environments,
     (bucket) => bucket.provider === model.provider && bucket.model === model.model,
   );
-  const providers = [model.provider];
+  const series = seriesFor("harness").filter(({ key }) => key === model.provider);
   const presentation = PROVIDER_PRESENTATION[model.provider];
   const costUnknown = isModelCostUnknown(model);
   const hitRate = cacheHitRate(model);
@@ -106,7 +106,7 @@ export function UsageModelDialog({
 
             {/* Unpriced cost is unknown, not zero, so its trend shows tokens. */}
             <UsageProviderChart
-              providers={providers}
+              series={series}
               days={chartWindow.days}
               daily={usage.daily}
               hours={chartWindow.hours}
