@@ -17,13 +17,13 @@ import { msg } from "gt-react";
 import { m, type MessageResolver } from "../../i18n/messages";
 import { shortcutConflictKey, shortcutKeyFromEvent } from "../../keybindings";
 import { isMacPlatform } from "../../lib/utils";
-import { METRIC_OPTIONS, WINDOW_OPTIONS } from "../usage/usageShortcuts";
+import { GROUP_BY_OPTIONS, METRIC_OPTIONS, WINDOW_OPTIONS } from "../usage/usageShortcuts";
 
 // Rank every usage command; mixing rank and alphabetical comparisons makes order input-dependent.
 const usageCommandOrder = new Map<KeybindingCommand, number>(
   [
     "usage.open" as const,
-    ...[...METRIC_OPTIONS, ...WINDOW_OPTIONS].map((option) => option.command),
+    ...[...GROUP_BY_OPTIONS, ...METRIC_OPTIONS, ...WINDOW_OPTIONS].map((option) => option.command),
   ].map((command, index) => [command, index]),
 );
 
@@ -470,9 +470,13 @@ const COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
 
 // Whole labels: search titles keep the encoded message, which cannot nest another one.
 const USAGE_COMMAND_LABELS: Record<
-  (typeof METRIC_OPTIONS)[number]["command"] | (typeof WINDOW_OPTIONS)[number]["command"],
+  | (typeof GROUP_BY_OPTIONS)[number]["command"]
+  | (typeof METRIC_OPTIONS)[number]["command"]
+  | (typeof WINDOW_OPTIONS)[number]["command"],
   string
 > = {
+  "usage.group.harness": msg("Usage: Group by: Harness"),
+  "usage.group.family": msg("Usage: Group by: Model"),
   "usage.cost": msg("Usage: Cost"),
   "usage.tokens": msg("Usage: Tokens"),
   "usage.limits": msg("Usage: Limits"),
