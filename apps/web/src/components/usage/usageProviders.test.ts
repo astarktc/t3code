@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { rankProvidersByMetric } from "./usageProviders";
+import { rankProvidersByMetric, rankSeriesByMetric, seriesFor } from "./usageProviders";
 
 describe("rankProvidersByMetric", () => {
   it("ranks by the selected metric, highest first", () => {
@@ -24,5 +24,22 @@ describe("rankProvidersByMetric", () => {
 
     expect(rankProvidersByMetric(providers, totals, "tokens")).toEqual(["grok", "claude", "codex"]);
     expect(providers).toEqual(["claude", "codex", "grok"]);
+  });
+});
+
+describe("rankSeriesByMetric", () => {
+  it("ranks model families by the selected metric, ties in reading order", () => {
+    const totals = new Map([
+      ["anthropic", { totalTokens: 100, costUsd: 30 }],
+      ["openai", { totalTokens: 300, costUsd: 10 }],
+      ["google", { totalTokens: 100, costUsd: 30 }],
+    ]);
+    const families = seriesFor("family").filter(({ key }) => totals.has(key));
+    const ranked = (metric: "cost" | "tokens") =>
+      rankSeriesByMetric(families, (key) => totals.get(key), metric).map(({ key }) => key);
+
+    expect(ranked("tokens")).toEqual(["openai", "anthropic", "google"]);
+    expect(ranked("cost")).toEqual(["anthropic", "google", "openai"]);
+    expect(families.map(({ key }) => key)).toEqual(["anthropic", "openai", "google"]);
   });
 });
