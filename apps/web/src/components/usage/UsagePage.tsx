@@ -726,7 +726,8 @@ function UsageOverview({
   const activeKeys = new Set<UsageSeriesKey>(
     byFamily
       ? merged.families
-          .filter((family) => family.totalTokens > 0 || family.costUsd > 0)
+          // Family rows count requests, so a request-only family keeps its row.
+          .filter((family) => family.records > 0 || family.totalTokens > 0 || family.costUsd > 0)
           .map((family) => family.family)
       : activeProviders,
   );
