@@ -8,6 +8,8 @@ const UsagePagePreferencesSchema = Schema.Struct({
   metric: Schema.Literals(["cost", "tokens", "limits"]),
   windowDays: Schema.Literals([1, 7, 30, 90]),
   hiddenProviders: Schema.optional(Schema.Array(UsageProviderKind)),
+  /** Absent in preferences saved before grouping existed; reads as harness. */
+  groupBy: Schema.optionalKey(Schema.Literals(["harness", "family"])),
 });
 export type UsagePagePreferences = typeof UsagePagePreferencesSchema.Type;
 

@@ -43,4 +43,13 @@ describe("Usage page preferences", () => {
     saveUsagePagePreferences({ metric: "tokens", windowDays: 7 });
     expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 7 });
   });
+
+  it("round-trips grouping by model", () => {
+    saveUsagePagePreferences({ metric: "cost", windowDays: 30, groupBy: "family" });
+    expect(readUsagePagePreferences()).toEqual({
+      metric: "cost",
+      windowDays: 30,
+      groupBy: "family",
+    });
+  });
 });
