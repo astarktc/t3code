@@ -16,6 +16,10 @@ describe("buildPeriodColumns", () => {
           ["claude" as const, { costUsd: 20, totalTokens: 200 }],
           ["pi" as const, { costUsd: 5, totalTokens: 50 }],
         ]),
+        byFamily: new Map([
+          ["anthropic" as const, { costUsd: 25, totalTokens: 250 }],
+          ["openai" as const, { costUsd: 10, totalTokens: 100 }],
+        ]),
       },
     ],
     [
@@ -25,6 +29,7 @@ describe("buildPeriodColumns", () => {
         costUsd: 5,
         totalTokens: 50,
         byProvider: new Map([["claude" as const, { costUsd: 5, totalTokens: 50 }]]),
+        byFamily: new Map([["anthropic" as const, { costUsd: 5, totalTokens: 50 }]]),
       },
     ],
   ]);
@@ -33,13 +38,23 @@ describe("buildPeriodColumns", () => {
     const [first] = buildPeriodColumns(days, byDay, "cost");
 
     expect(first?.bands).toEqual([
-      { provider: "codex", value: 10 },
-      { provider: "claude", value: 20 },
-      { provider: "grok", value: 0 },
-      { provider: "cursor", value: 0 },
-      { provider: "opencode", value: 0 },
-      { provider: "antigravity", value: 0 },
-      { provider: "pi", value: 5 },
+      { key: "codex", value: 10 },
+      { key: "claude", value: 20 },
+      { key: "grok", value: 0 },
+      { key: "cursor", value: 0 },
+      { key: "opencode", value: 0 },
+      { key: "antigravity", value: 0 },
+      { key: "pi", value: 5 },
+    ]);
+  });
+
+  it("plots model families from the same days when grouped by model", () => {
+    const columns = buildPeriodColumns(days, byDay, "cost", "family");
+
+    expect(columns.map((column) => column.total)).toEqual([35, 0, 5]);
+    expect(columns[0]?.bands.filter((band) => band.value > 0)).toEqual([
+      { key: "anthropic", value: 25 },
+      { key: "openai", value: 10 },
     ]);
   });
 });
