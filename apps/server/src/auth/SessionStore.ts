@@ -489,7 +489,19 @@ export class SessionStore extends Context.Service<
 >()("t3/auth/SessionStore") {}
 
 const SIGNING_SECRET_NAME = "server-signing-key";
-const DEFAULT_SESSION_TTL = Duration.days(30);
+/**
+ * Pairing sessions slide: every client connect moves `expires_at` to now + this
+ * window, so a paired device lapses only after this long idle. A session that
+ * never connects (an unused pairing) dies at issue + the same window.
+ */
+const SESSION_IDLE_TTL = Duration.days(90);
+const DEFAULT_SESSION_TTL = SESSION_IDLE_TTL;
+/**
+ * Proof-bound (DPoP) access tokens are short-lived by design and re-exchanged
+ * by their client; they keep their fixed deadline even while connected.
+ */
+const isSlidingSessionMethod = (method: ServerAuthSessionMethod): boolean =>
+  method === "browser-session-cookie" || method === "bearer-access-token";
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
 
 const SessionClaims = Schema.Struct({
@@ -646,6 +658,21 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const renewOnConnect = Effect.fn("SessionStore.renewOnConnect")(function* (
+    sessionId: AuthSessionId,
+  ) {
+    const lastConnectedAt = yield* DateTime.now;
+    yield* authSessions.setLastConnectedAt({ sessionId, lastConnectedAt });
+    const row = yield* authSessions.getById({ sessionId });
+    if (Option.isNone(row) || !isSlidingSessionMethod(row.value.method)) return;
+    yield* authSessions.renewExpiry({
+      sessionId,
+      expiresAt: DateTime.add(lastConnectedAt, {
+        milliseconds: Duration.toMillis(SESSION_IDLE_TTL),
+      }),
+    });
+  });
+
   const markConnected: SessionStore["Service"]["markConnected"] = (sessionId) =>
     Ref.modify(connectedSessionsRef, (current) => {
       const next = new Map(current);
@@ -654,16 +681,7 @@ const make = Effect.gen(function* () {
       return [wasDisconnected, next] as const;
     }).pipe(
       Effect.flatMap((wasDisconnected) =>
-        wasDisconnected
-          ? DateTime.now.pipe(
-              Effect.flatMap((lastConnectedAt) =>
-                authSessions.setLastConnectedAt({
-                  sessionId,
-                  lastConnectedAt,
-                }),
-              ),
-            )
-          : Effect.void,
+        wasDisconnected ? renewOnConnect(sessionId) : Effect.void,
       ),
       Effect.flatMap(() => loadActiveSession(sessionId)),
       Effect.flatMap((session) =>
@@ -883,8 +901,11 @@ const make = Effect.gen(function* () {
         });
       }
       // A peer link's session renews while it is used and its token is never
-      // reissued, so the session row holds its deadline, not the token.
-      const rowHoldsDeadline = claims.plk === 1;
+      // reissued, so the session row holds its deadline, not the token. Cookie
+      // and bearer pairing sessions slide the same way on every connect; a
+      // renewable (DPoP) token keeps its own short expiry.
+      const rowHoldsDeadline =
+        claims.plk === 1 || (isSlidingSessionMethod(claims.method) && claims.rnw !== 1);
       if (!rowHoldsDeadline && claims.exp <= observedAt.epochMilliseconds) {
         return yield* new SessionTokenExpiredError({
           sessionId: claims.sid,
