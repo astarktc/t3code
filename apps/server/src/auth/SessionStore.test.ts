@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -9,6 +10,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -485,6 +487,115 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
         expect(revokedClientWebSocket.revokedAt.epochMilliseconds).toBeGreaterThanOrEqual(0);
       }
     }).pipe(Effect.provide(layerSessionStore())),
+  );
+
+  it.effect("renews a pairing session's expiry on every connect (sliding idle window)", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const idleTtlMillis = Duration.toMillis(Duration.days(90));
+      const issued = yield* sessions.issue({
+        method: "bearer-access-token",
+        subject: "one-time-token",
+        client: { label: "iPad", deviceType: "tablet" },
+      });
+      const issuedAt = yield* DateTime.now;
+      expect(issued.expiresAt.epochMilliseconds).toBe(issuedAt.epochMilliseconds + idleTtlMillis);
+
+      // First connect, 10 days in: the deadline moves to connect + idle window,
+      // and the renewed value is what clients receive through the upsert.
+      yield* TestClock.adjust(Duration.days(10));
+      const upsert = yield* sessions.streamChanges.pipe(
+        Stream.filter(
+          (change) =>
+            change.type === "clientUpserted" &&
+            change.clientSession.sessionId === issued.sessionId,
+        ),
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* sessions.markConnected(issued.sessionId);
+      const connectedAt = yield* DateTime.now;
+      const renewedExpiresAt = connectedAt.epochMilliseconds + idleTtlMillis;
+      const change = yield* Fiber.join(upsert);
+      expect(Option.isSome(change)).toBe(true);
+      if (Option.isSome(change) && change.value.type === "clientUpserted") {
+        expect(change.value.clientSession.expiresAt.epochMilliseconds).toBe(renewedExpiresAt);
+        expect(change.value.clientSession.lastConnectedAt?.epochMilliseconds).toBe(
+          connectedAt.epochMilliseconds,
+        );
+      }
+      const listed = yield* sessions.listActive();
+      expect(
+        listed.find((entry) => entry.sessionId === issued.sessionId)?.expiresAt.epochMilliseconds,
+      ).toBe(renewedExpiresAt);
+      yield* sessions.markDisconnected(issued.sessionId);
+
+      // Past the token's own issue-time deadline but inside the renewed window,
+      // the unchanged token still verifies, reporting the renewed deadline.
+      yield* TestClock.adjust(Duration.days(85));
+      const verified = yield* sessions.verify(issued.token);
+      expect(verified.expiresAt?.epochMilliseconds).toBe(renewedExpiresAt);
+
+      // Each reconnect slides it again.
+      yield* sessions.markConnected(issued.sessionId);
+      const reconnectedAt = yield* DateTime.now;
+      yield* sessions.markDisconnected(issued.sessionId);
+      const slidAgain = yield* sessions.verify(issued.token);
+      expect(slidAgain.expiresAt?.epochMilliseconds).toBe(
+        reconnectedAt.epochMilliseconds + idleTtlMillis,
+      );
+
+      // Idle past the window, the session is gone.
+      yield* TestClock.adjust(Duration.days(90));
+      const expired = yield* Effect.flip(sessions.verify(issued.token));
+      expect(expired._tag).toBe("SessionTokenExpiredError");
+      if (expired._tag === "SessionTokenExpiredError") {
+        expect(expired.expiresAt.epochMilliseconds).toBe(
+          reconnectedAt.epochMilliseconds + idleTtlMillis,
+        );
+      }
+      expect(yield* sessions.listActive()).toHaveLength(0);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
+  it.effect("a pairing session that never connects dies at issue + the idle window", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const issued = yield* sessions.issue({
+        method: "bearer-access-token",
+        subject: "one-time-token",
+      });
+      yield* TestClock.adjust(Duration.days(90));
+      const expired = yield* Effect.flip(sessions.verify(issued.token));
+      expect(expired._tag).toBe("SessionTokenExpiredError");
+      if (expired._tag === "SessionTokenExpiredError") {
+        expect(expired.expiresAt.epochMilliseconds).toBe(issued.expiresAt.epochMilliseconds);
+      }
+      expect(yield* sessions.listActive()).toHaveLength(0);
+    }).pipe(Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
+  it.effect("connecting never shortens a deadline and never slides a DPoP token", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const longLived = yield* sessions.issue({
+        method: "bearer-access-token",
+        subject: "bot",
+        ttl: Duration.days(365),
+      });
+      const relay = yield* sessions.issue(relaySessionInput);
+      yield* TestClock.adjust(Duration.minutes(5));
+      yield* sessions.markConnected(longLived.sessionId);
+      yield* sessions.markConnected(relay.sessionId);
+      const listed = yield* sessions.listActive();
+      expect(
+        listed.find((entry) => entry.sessionId === longLived.sessionId)?.expiresAt
+          .epochMilliseconds,
+      ).toBe(longLived.expiresAt.epochMilliseconds);
+      expect(
+        listed.find((entry) => entry.sessionId === relay.sessionId)?.expiresAt.epochMilliseconds,
+      ).toBe(relay.expiresAt.epochMilliseconds);
+    }).pipe(Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
   );
 
   it.effect("records client connection metadata without clearing prior values", () =>
