@@ -10,9 +10,11 @@ import {
 } from "@t3tools/shared/dpop";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -404,6 +406,96 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
           { failure: { _tag: "ServerAuthMcpApprovalCodeError", reason: "unknown_or_used" } },
         ]);
       }).pipe(Effect.provide(layerEnvironmentAuth())),
+  );
+
+  it.effect("renews a linked environment's MCP session on use (sliding idle window)", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const idleWindowMillis = Duration.toMillis(Duration.days(90));
+      const link = yield* serverAuth.issueMcpClientSession({
+        label: "T3 Code · Laptop",
+        access: "full-access",
+        peerLink: true,
+        client: { deviceType: "bot" },
+      });
+      const issuedAt = yield* DateTime.now;
+      expect(link.expiresAt.epochMilliseconds).toBe(issuedAt.epochMilliseconds + idleWindowMillis);
+
+      // Used 40 days in, past a fixed 30-day term: the deadline moves to use +
+      // the idle window, and the session reports the renewed value.
+      yield* TestClock.adjust(Duration.days(40));
+      const used = yield* serverAuth.authenticateMcpClient(makeBearerRequest(link.token));
+      const usedAt = yield* DateTime.now;
+      expect(used.peerLink).toBe(true);
+      expect(used.expiresAt?.epochMilliseconds).toBe(usedAt.epochMilliseconds + idleWindowMillis);
+      const listed = (yield* serverAuth.listSessions()).find(
+        (session) => session.sessionId === link.sessionId,
+      );
+      expect(listed?.expiresAt.epochMilliseconds).toBe(usedAt.epochMilliseconds + idleWindowMillis);
+      expect(listed?.lastConnectedAt?.epochMilliseconds).toBe(usedAt.epochMilliseconds);
+    }).pipe(Effect.provide(Layer.merge(layerEnvironmentAuth(), TestClock.layer()))),
+  );
+
+  it.effect("renews an MCP session at most hourly under steady use, not on every request", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const idleWindowMillis = Duration.toMillis(Duration.days(90));
+      const link = yield* serverAuth.issueMcpClientSession({
+        label: "T3 Code · Laptop",
+        access: "auto",
+        peerLink: true,
+        client: { deviceType: "bot" },
+      });
+      const use = serverAuth.authenticateMcpClient(makeBearerRequest(link.token));
+      const stored = serverAuth
+        .listSessions()
+        .pipe(
+          Effect.map((listed) => listed.find((session) => session.sessionId === link.sessionId)),
+        );
+
+      yield* TestClock.adjust(Duration.days(1));
+      const renewedAt = (yield* DateTime.now).epochMilliseconds;
+      expect((yield* use).expiresAt?.epochMilliseconds).toBe(renewedAt + idleWindowMillis);
+
+      // Half an hour later the request leaves the session as it was.
+      yield* TestClock.adjust(Duration.minutes(30));
+      expect((yield* use).expiresAt?.epochMilliseconds).toBe(renewedAt + idleWindowMillis);
+      const unchanged = yield* stored;
+      expect(unchanged?.expiresAt.epochMilliseconds).toBe(renewedAt + idleWindowMillis);
+      expect(unchanged?.lastConnectedAt?.epochMilliseconds).toBe(renewedAt);
+
+      // Over an hour after that renewal, use renews it again.
+      yield* TestClock.adjust(Duration.minutes(31));
+      const renewedAgainAt = (yield* DateTime.now).epochMilliseconds;
+      expect((yield* use).expiresAt?.epochMilliseconds).toBe(renewedAgainAt + idleWindowMillis);
+      expect((yield* stored)?.lastConnectedAt?.epochMilliseconds).toBe(renewedAgainAt);
+    }).pipe(Effect.provide(Layer.merge(layerEnvironmentAuth(), TestClock.layer()))),
+  );
+
+  it.effect("an MCP session that is never used dies at issue + the idle window", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const link = yield* serverAuth.issueMcpClientSession({
+        label: "T3 Code · Laptop",
+        access: "auto",
+        peerLink: true,
+        client: { deviceType: "bot" },
+      });
+      const listedIds = serverAuth
+        .listSessions()
+        .pipe(Effect.map((listed) => listed.map((session) => session.sessionId)));
+
+      // Listing is not use: a day short of the window it is still there.
+      yield* TestClock.adjust(Duration.days(89));
+      expect(yield* listedIds).toContain(link.sessionId);
+
+      yield* TestClock.adjust(Duration.days(1));
+      expect(yield* listedIds).not.toContain(link.sessionId);
+      const expired = yield* Effect.flip(
+        serverAuth.authenticateMcpClient(makeBearerRequest(link.token)),
+      );
+      expect(expired._tag).toBe("ServerAuthInvalidCredentialError");
+    }).pipe(Effect.provide(Layer.merge(layerEnvironmentAuth(), TestClock.layer()))),
   );
 
   it.effect("narrows seeded desktop grants to the requested scopes", () =>

@@ -420,6 +420,14 @@ export class SessionStore extends Context.Service<
     ) => Effect.Effect<number, SessionCredentialInternalError>;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
+    /**
+     * Renews a just-verified session for a client that uses it without ever
+     * connecting (an MCP client, such as another environment's link), as a
+     * connect would. Returns the deadline now in force.
+     */
+    readonly renewOnUse: (
+      session: Pick<VerifiedSession, "sessionId" | "method" | "expiresAt">,
+    ) => Effect.Effect<DateTime.DateTime | undefined, never>;
   }
 >()("t3/auth/SessionStore") {}
 
@@ -429,8 +437,14 @@ const SIGNING_SECRET_NAME = "server-signing-key";
  * window, so a paired device lapses only after this long idle. A session that
  * never connects (an unused pairing) dies at issue + the same window.
  */
-const SESSION_IDLE_TTL = Duration.days(90);
+export const SESSION_IDLE_TTL = Duration.days(90);
 const DEFAULT_SESSION_TTL = SESSION_IDLE_TTL;
+/**
+ * Use renews a session at most this often: one whose deadline is still within
+ * this much of a full idle window is left alone, so steady use costs a write
+ * per interval, not one per request.
+ */
+const SESSION_USE_RENEWAL_INTERVAL = Duration.hours(1);
 /**
  * Proof-bound (DPoP) access tokens are short-lived by design and re-exchanged
  * by their client; they keep their fixed deadline even while connected.
@@ -625,6 +639,34 @@ const make = Effect.gen(function* () {
       ),
       Effect.withSpan("SessionStore.markConnected"),
     );
+
+  const renewOnUse: SessionStore["Service"]["renewOnUse"] = Effect.fn("SessionStore.renewOnUse")(
+    function* (session) {
+      const now = yield* DateTime.now;
+      const renewedRecently =
+        session.expiresAt !== undefined &&
+        session.expiresAt.epochMilliseconds >=
+          now.epochMilliseconds +
+            Duration.toMillis(SESSION_IDLE_TTL) -
+            Duration.toMillis(SESSION_USE_RENEWAL_INTERVAL);
+      if (!isSlidingSessionMethod(session.method) || renewedRecently) return session.expiresAt;
+      // Use renews exactly as a connect does.
+      yield* renewOnConnect(session.sessionId);
+      const renewed = yield* loadActiveSession(session.sessionId);
+      if (Option.isNone(renewed)) return session.expiresAt;
+      yield* emitUpsert(renewed.value);
+      return renewed.value.expiresAt;
+    },
+    (effect, session) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("Failed to renew a session on use.").pipe(
+            Effect.annotateLogs({ sessionId: session.sessionId, cause }),
+            Effect.as(session.expiresAt),
+          ),
+        ),
+      ),
+  );
 
   const markDisconnected: SessionStore["Service"]["markDisconnected"] = (sessionId) =>
     Ref.update(connectedSessionsRef, (current) => {
@@ -1097,6 +1139,7 @@ const make = Effect.gen(function* () {
     revoke,
     revokeAllExcept,
     markConnected,
+    renewOnUse,
     markDisconnected,
   });
 });

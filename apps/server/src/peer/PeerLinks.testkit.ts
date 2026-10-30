@@ -13,6 +13,7 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
@@ -25,6 +26,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerHttp from "../http.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as PeerLinks from "./PeerLinks.ts";
@@ -66,6 +68,7 @@ export const servePeer = <E, R>(
     const descriptor = yield* Ref.make(initial);
     const bearers = yield* Ref.make<ReadonlyArray<string>>([]);
     const probes = yield* Ref.make(0);
+    const reportsSessionExpiry = yield* Ref.make(true);
     const layerEnvironment = Layer.succeed(ServerEnvironment.ServerEnvironment, {
       getEnvironmentId: Ref.get(descriptor).pipe(Effect.map((current) => current.environmentId)),
       getDescriptor: Ref.get(descriptor),
@@ -95,6 +98,19 @@ export const servePeer = <E, R>(
         }),
       { global: true },
     );
+    const layerSessionExpiryReporting = HttpRouter.middleware(
+      (httpEffect) =>
+        Effect.gen(function* () {
+          const response = yield* httpEffect;
+          return (yield* Ref.get(reportsSessionExpiry))
+            ? response
+            : HttpServerResponse.removeHeader(
+                response,
+                McpInvocationContext.SESSION_EXPIRES_AT_HEADER,
+              );
+        }),
+      { global: true },
+    );
     const layerRoutes = Layer.mergeAll(
       HttpApiBuilder.layer(PeerTestApi).pipe(
         Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
@@ -113,6 +129,7 @@ export const servePeer = <E, R>(
       ),
     ).pipe(
       Layer.provide(layerRecordBearers),
+      Layer.provide(layerSessionExpiryReporting),
       Layer.provide(layerEnvironment),
       Layer.provide(Layer.succeedContext(authContext)),
     );
@@ -135,6 +152,8 @@ export const servePeer = <E, R>(
       bearers,
       /** How often its descriptor was asked for, as a probe of whether it answers. */
       probes,
+      /** Off, its `/mcp` answers carry no session deadline, as a version without renewal. */
+      reportsSessionExpiry,
       /** The sessions linking created there, which its Connections lists. */
       linkedSessions: auth
         .listSessions()

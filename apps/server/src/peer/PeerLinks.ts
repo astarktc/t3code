@@ -90,6 +90,15 @@ export class PeerLinks extends Context.Service<
       environmentId: EnvironmentId,
       outcome: { readonly error: string | null },
     ) => Effect.Effect<void>;
+    /**
+     * Moves the link's expiry later to the deadline the peer reported for its
+     * session: use renews a link's session there, so its expiry here follows.
+     * Never moves it earlier.
+     */
+    readonly extendExpiry: (
+      environmentId: EnvironmentId,
+      expiresAt: DateTime.DateTime,
+    ) => Effect.Effect<void>;
   }
 >()("t3/peer/PeerLinks") {}
 
@@ -604,6 +613,15 @@ const make = Effect.gen(function* () {
       Effect.ignoreCause({ log: true }),
     );
 
+  const extendExpiry: PeerLinks["Service"]["extendExpiry"] = (environmentId, expiresAt) => {
+    // Stored as `formatIso` writes it, so later sorts later.
+    const renewed = DateTime.formatIso(expiresAt);
+    return sql`
+      UPDATE peer_environment_links SET expires_at = ${renewed}
+      WHERE environment_id = ${environmentId} AND expires_at < ${renewed}
+    `.pipe(Effect.asVoid, Effect.ignoreCause({ log: true }));
+  };
+
   return PeerLinks.of({
     enabled,
     link,
@@ -613,6 +631,7 @@ const make = Effect.gen(function* () {
     unlink,
     resolve,
     recordOutcome,
+    extendExpiry,
   });
 });
 
