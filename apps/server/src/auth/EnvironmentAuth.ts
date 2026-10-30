@@ -70,7 +70,8 @@ export interface IssuedBearerSession {
 
 // MCP client tokens are restricted to /mcp; HTTP API and WebSocket RPC would bypass their access cap.
 const MCP_CLIENT_SUBJECT = "mcp-client";
-const MCP_CLIENT_SESSION_TTL = Duration.days(30);
+/** Each use renews an MCP client session (`SessionStore.renewOnUse`): it lapses after this long unused. */
+const MCP_CLIENT_SESSION_TTL = SessionStore.SESSION_IDLE_TTL;
 
 export interface McpClientSession {
   readonly sessionId: AuthSessionId;
@@ -78,6 +79,8 @@ export interface McpClientSession {
   readonly access: AuthMcpClientAccess;
   /** Another T3 Code environment's link, whose work here stays within it. */
   readonly peerLink: boolean;
+  /** The session's deadline, as this use renewed it. */
+  readonly expiresAt?: DateTime.DateTime;
 }
 
 export interface AuthenticatedSession {
@@ -1288,14 +1291,20 @@ export const make = Effect.gen(function* () {
       mapSessionVerificationErrors,
       Effect.flatMap((session) =>
         session.subject === MCP_CLIENT_SUBJECT && session.method === "bearer-access-token"
-          ? Effect.succeed({
-              sessionId: session.sessionId,
-              label: session.client.label ?? "MCP client",
-              access: session.scopes.includes(AuthOrchestrationOperateScope)
-                ? (session.runtimeModeCeiling ?? "approval-required")
-                : "read-only",
-              peerLink: session.peerLink === true,
-            } satisfies McpClientSession)
+          ? sessions.renewOnUse(session).pipe(
+              Effect.map(
+                (expiresAt) =>
+                  ({
+                    sessionId: session.sessionId,
+                    label: session.client.label ?? "MCP client",
+                    access: session.scopes.includes(AuthOrchestrationOperateScope)
+                      ? (session.runtimeModeCeiling ?? "approval-required")
+                      : "read-only",
+                    peerLink: session.peerLink === true,
+                    ...(expiresAt ? { expiresAt } : {}),
+                  }) satisfies McpClientSession,
+              ),
+            )
           : Effect.fail(
               new ServerAuthInvalidCredentialError({
                 diagnostic: "Only MCP client sessions are accepted here.",

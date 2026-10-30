@@ -6,8 +6,10 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as HttpBody from "effect/http/HttpBody";
@@ -82,6 +84,12 @@ const linkedEnvironmentsOffThere = new OrchestratorMcpFailure({
   message:
     "The linked environment has Linked environments turned off. Turn it on in its Settings → Labs.",
 });
+
+/** The deadline the peer reports for the link's session; nothing from a version that reports none. */
+const reportedExpiry = (headers: Readonly<Record<string, string | undefined>>) => {
+  const value = headers[McpInvocationContext.SESSION_EXPIRES_AT_HEADER];
+  return value === undefined ? Option.none() : DateTime.make(value);
+};
 
 /** The body of an MCP response: JSON, or a single server-sent event carrying JSON. */
 const responseJson = (contentType: string | undefined, text: string) =>
@@ -182,6 +190,14 @@ const make = Effect.gen(function* () {
         response = yield* callOnce(renewed);
       } else if (existing === undefined) {
         yield* Ref.update(sessions, (current) => new Map(current).set(sessionKey, sessionId));
+      }
+      // The peer renews the link's session as it is used; its expiry here follows.
+      const renewed = reportedExpiry(response.headers);
+      if (
+        Option.isSome(renewed) &&
+        DateTime.isGreaterThan(renewed.value, resolved.link.expiresAt)
+      ) {
+        yield* links.extendExpiry(input.environmentId, renewed.value);
       }
       if (response.status === 401) {
         return yield* new OrchestratorMcpFailure({

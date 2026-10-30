@@ -507,8 +507,7 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
       const upsert = yield* sessions.streamChanges.pipe(
         Stream.filter(
           (change) =>
-            change.type === "clientUpserted" &&
-            change.clientSession.sessionId === issued.sessionId,
+            change.type === "clientUpserted" && change.clientSession.sessionId === issued.sessionId,
         ),
         Stream.runHead,
         Effect.forkScoped({ startImmediately: true }),
@@ -595,6 +594,35 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
       expect(
         listed.find((entry) => entry.sessionId === relay.sessionId)?.expiresAt.epochMilliseconds,
       ).toBe(relay.expiresAt.epochMilliseconds);
+    }).pipe(Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
+  it.effect("use never shortens a deadline and leaves a DPoP token as it was", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const longLived = yield* sessions.issue({
+        method: "bearer-access-token",
+        subject: "mcp-client",
+        ttl: Duration.days(365),
+      });
+      const relay = yield* sessions.issue(relaySessionInput);
+      yield* TestClock.adjust(Duration.minutes(5));
+      expect(
+        (yield* sessions.renewOnUse(yield* sessions.verify(longLived.token)))?.epochMilliseconds,
+      ).toBe(longLived.expiresAt.epochMilliseconds);
+      expect(
+        (yield* sessions.renewOnUse(yield* sessions.verify(relay.token)))?.epochMilliseconds,
+      ).toBe(relay.expiresAt.epochMilliseconds);
+      const listed = yield* sessions.listActive();
+      const longLivedListed = listed.find((entry) => entry.sessionId === longLived.sessionId);
+      const relayListed = listed.find((entry) => entry.sessionId === relay.sessionId);
+      expect(longLivedListed?.expiresAt.epochMilliseconds).toBe(
+        longLived.expiresAt.epochMilliseconds,
+      );
+      expect(relayListed?.expiresAt.epochMilliseconds).toBe(relay.expiresAt.epochMilliseconds);
+      // Use is not a connect: a session use cannot renew records nothing.
+      expect(longLivedListed?.lastConnectedAt).toBeNull();
+      expect(relayListed?.lastConnectedAt).toBeNull();
     }).pipe(Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
   );
 });

@@ -2,6 +2,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import { type ExecutionEnvironmentDescriptor, OrchestratorMcpFailure } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -28,6 +29,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import {
   descriptorOf,
   layerLinkingEnvironment,
+  linkTo,
   servePeer,
   type ServedPeer,
 } from "./PeerLinks.testkit.ts";
@@ -402,13 +404,88 @@ it.effect("tells the agent to link again once the peer revokes the link or it ex
       });
       yield* probe(a);
 
-      yield* TestClock.adjust(Duration.days(31));
+      // A link lapses one idle window (90 days) after it was last used.
+      yield* TestClock.adjust(Duration.days(91));
       expect((yield* a.links.list).map((link) => link.status)).toEqual(["expired"]);
       yield* Ref.set(b.bearers, []);
       const expired = yield* probe(a).pipe(Effect.flip);
       expect(expired.code).toBe("capability_denied");
       expect(expired.message).toContain("expired");
       expect(yield* Ref.get(b.bearers)).toEqual([]);
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "a link in use outlives its first deadline: the peer renews it and reports the new one",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const b = yield* serveB(box);
+        const a = yield* makeA(laptop);
+        const day = Duration.toMillis(Duration.days(1));
+        const linked = yield* linkTo(a.links, b);
+        // Unused, a link lapses one idle window (90 days) after linking.
+        const linkedAt = linked.linkedAt.epochMilliseconds;
+        expect(linked.expiresAt.epochMilliseconds).toBe(linkedAt + 90 * day);
+
+        // Used 60 days in, the peer moves its session to use + 90 days and says
+        // so in its answer; this environment keeps that deadline as the link's.
+        yield* TestClock.adjust(Duration.days(60));
+        yield* probe(a);
+        expect(
+          (yield* linkedSessions(b)).map((session) => session.expiresAt.epochMilliseconds),
+        ).toEqual([linkedAt + 150 * day]);
+        expect(
+          (yield* a.links.list).map((link) => [link.status, link.expiresAt.epochMilliseconds]),
+        ).toEqual([["reachable", linkedAt + 150 * day]]);
+
+        // Past the deadline it was linked with, the link still resolves here and
+        // the peer still accepts it.
+        yield* TestClock.adjust(Duration.days(40));
+        expect(yield* probe(a)).toEqual({ caller: "T3 Code · Laptop", modes: "auto/default" });
+        expect(
+          Option.map(
+            yield* a.links.get(box.environmentId),
+            (link) => link.expiresAt.epochMilliseconds,
+          ),
+        ).toEqual(Option.some(linkedAt + 190 * day));
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("a link's expiry here follows only a later deadline the peer reports", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const b = yield* serveB(box);
+      const a = yield* makeA(laptop);
+      const day = Duration.toMillis(Duration.days(1));
+      const stored = a.links
+        .get(box.environmentId)
+        .pipe(Effect.map(Option.map((link) => link.expiresAt.epochMilliseconds)));
+
+      // A version that reports no deadline leaves the stored expiry as it was.
+      yield* Ref.set(b.reportsSessionExpiry, false);
+      const linked = yield* linkTo(a.links, b);
+      const linkedAt = linked.linkedAt.epochMilliseconds;
+      yield* TestClock.adjust(Duration.days(10));
+      expect(yield* probe(a)).toEqual({ caller: "T3 Code · Laptop", modes: "auto/default" });
+      expect(yield* stored).toEqual(Option.some(linked.expiresAt.epochMilliseconds));
+
+      // Updated there, the next answer carries the deadline its session already
+      // has, renewed by that last call.
+      yield* Ref.set(b.reportsSessionExpiry, true);
+      yield* probe(a);
+      expect(yield* stored).toEqual(Option.some(linkedAt + 100 * day));
+
+      // A deadline earlier than the stored one never shortens it.
+      yield* a.sql`
+        UPDATE peer_environment_links
+        SET expires_at = ${DateTime.formatIso(DateTime.makeUnsafe(linkedAt + 365 * day))}
+      `;
+      yield* TestClock.adjust(Duration.days(1));
+      yield* probe(a);
+      expect(yield* stored).toEqual(Option.some(linkedAt + 365 * day));
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
