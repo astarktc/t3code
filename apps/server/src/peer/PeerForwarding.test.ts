@@ -734,8 +734,8 @@ it.effect("refuses a launch there above the link's access, naming the link", () 
       expect(message).not.toContain("parent mode");
       expect((yield* Ref.get(seen)).launches).toEqual([]);
 
-      // Once the link has expired, that is what the agent needs to hear.
-      yield* TestClock.adjust(Duration.days(31));
+      // Once the link has expired (90 days after its last use), that is what the agent needs to hear.
+      yield* TestClock.adjust(Duration.days(91));
       expect(failureOf(yield* launchAboveLink).message).toContain("expired");
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
