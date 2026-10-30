@@ -244,6 +244,12 @@ export function buildPiRpcLaunch(input: {
   readonly extensionPath: string | undefined;
   readonly sessionPath?: string | undefined;
   readonly ephemeral?: boolean;
+  /**
+   * T3 stops the process as soon as it has answered (discovery, text generation, forks).
+   * Such processes run with --offline: Pi's startup model-catalog refresh also renews expired
+   * OAuth credentials, and a stop mid-request loses the provider's rotated single-use refresh token.
+   */
+  readonly shortLived?: boolean;
   readonly disableExtensions?: boolean;
   readonly disableTools?: boolean;
   readonly runtimeMode?: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
@@ -268,6 +274,7 @@ export function buildPiRpcLaunch(input: {
         ? ["--session", input.sessionPath]
         : []),
     ...launchArgs,
+    ...(input.shortLived === true && !launchArgs.includes("--offline") ? ["--offline"] : []),
     // Restrictions must follow launch args so user flags cannot re-enable unattended tools/extensions.
     ...(input.disableExtensions === true ? ["--no-extensions"] : []),
     ...(input.disableTools === true ? ["--no-tools"] : []),
