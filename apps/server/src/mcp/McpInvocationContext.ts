@@ -11,6 +11,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { formatThreadLink, hostedThreadLink } from "@t3tools/shared/threadLinks";
@@ -50,7 +51,17 @@ export interface McpClientCaller {
   readonly senderThread?: OrchestrationV2LinkedSender | undefined;
   /** An outside client's thread links go through this hosted app, as Copy thread's do. */
   readonly hostedAppUrl?: string | undefined;
+  /** Its session's deadline, as this request renewed it (`SESSION_EXPIRES_AT_HEADER`). */
+  readonly expiresAt?: DateTime.DateTime | undefined;
 }
+
+/**
+ * `T3-Session-Expires-At: <ISO 8601>` on each `/mcp` answer to a signed-in
+ * client: its session's deadline, which use renews. Another environment
+ * linked here keeps it as the link's expiry; a version that sends none leaves
+ * that environment's stored expiry as it was.
+ */
+export const SESSION_EXPIRES_AT_HEADER = "t3-session-expires-at";
 
 /**
  * `T3-Mode-Limit: <runtimeMode>/<interactionMode>` lets an OAuth client cap
