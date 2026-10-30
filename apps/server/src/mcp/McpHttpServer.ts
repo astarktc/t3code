@@ -2,6 +2,7 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -159,6 +160,19 @@ const normalizeMcpHttpResponse = (
     : response;
 };
 
+/** Tells a signed-in client its session's deadline, which its request may have renewed. */
+const withSessionExpiry = (
+  response: HttpServerResponse.HttpServerResponse,
+  client: McpInvocationContext.McpClientCaller | undefined,
+): HttpServerResponse.HttpServerResponse =>
+  client?.expiresAt === undefined
+    ? response
+    : HttpServerResponse.setHeader(
+        response,
+        McpInvocationContext.SESSION_EXPIRES_AT_HEADER,
+        DateTime.formatIso(client.expiresAt),
+      );
+
 // Session tokens are `<payload>.<signature>`; registry tokens are a bare base64url secret.
 const looksLikeProviderToken = (token: string) => token.length > 0 && !token.includes(".");
 
@@ -278,6 +292,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     return yield* httpEffect.pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, admitted),
       Effect.map(normalizeMcpHttpResponse),
+      Effect.map((response) => withSessionExpiry(response, admitted.client)),
     );
   }) satisfies McpAuthMiddleware;
 }).pipe(Effect.withSpan("McpHttpServer.makeAuthMiddleware"));
