@@ -266,7 +266,7 @@ fork-infra/install-from-inside.sh --repair <script> --expect-asar <hash16>   # q
 **From an agent's tool call, run anything that can outlast the call in its own session.** An
 agent's shell call ends at its tool timeout (typically 600 s), and the abort kills the call's
 whole process group, `&` background jobs included (hazard 5). `deploy.sh --remote mac-uni-auto` waits out the
-work Mac's 3–6 min `integrity_check` of its 15 GB DB after relaunch, and `wps.sh <host> < install.ps1` runs for
+work Mac's `integrity_check` of its ~10 GB DB after relaunch (minutes when the host is busy), and `wps.sh <host> < install.ps1` runs for
 minutes per Windows host, so an attached run can be cut off after the host's work is done, and
 its final report is lost. Start such runs under `setsid` with a log, then poll in short calls:
 

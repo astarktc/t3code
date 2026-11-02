@@ -7,7 +7,7 @@
 # Make the copies first:
 #   Mac (local or over ssh):  sqlite3 ~/.t3/userdata/statev2.sqlite "VACUUM INTO '/tmp/<host>.sqlite'"
 #     VACUUM INTO reads one snapshot. `.backup` restarts from page 1 at every write by the
-#     running app, so on a busy DB (the work Mac's 15 GB) it never finishes.
+#     running app, so on a busy DB (the work Mac's ~10 GB) it never finishes.
 #     A large copy travels faster compressed: ssh <host> 'gzip -1 -c /tmp/<host>.sqlite' | gunzip -c > …
 #   Windows: scp the host's .t3/userdata/statev2.sqlite, -wal and -shm together into one dir.
 #
