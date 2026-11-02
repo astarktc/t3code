@@ -10,33 +10,20 @@ import * as NodePath from "node:path";
 
 const file = NodePath.join(NodeOS.homedir(), ".t3", "userdata", "settings.json");
 
+// Pickers show the budget router's auto models only (QM-306): each picks its backend
+// per request, so the physical anthropic/*, openai/* and cortex*/* rows are hidden.
+// Hidden ids stay addressable by name.
 const favorites = [
   "auto/opus-5-5",
   "auto/sonnet-5-5",
   "auto/haiku-5-5",
+  "auto/fable-5-1",
   "auto/gpt-6-astra",
   "auto/gpt-6.1-sol",
   "auto/gpt-6.1-terra",
   "auto/gpt-6-luna",
-  "anthropic/claude-fable-5-1",
-  "anthropic/claude-opus-5-5",
-  "openai/gpt-6-astra",
-  "openai/gpt-6.1-sol",
-  "openai/gpt-6.1-terra",
-  "openai/gpt-6-luna",
-  "cortex/claude-opus-5-5",
-  "cortex-responses/openai-gpt-6-astra",
-  "cortex-responses/openai-gpt-6.1-sol",
-  "cortex-responses/openai-gpt-6.1-terra",
-  "cortex-responses/openai-gpt-6-luna",
 ];
-const visibleOnly = [
-  "anthropic/claude-sonnet-5-5",
-  "anthropic/claude-haiku-5-5",
-  "cortex/claude-sonnet-5-5",
-  "cortex/claude-haiku-5-5",
-];
-const visible = [...favorites, ...visibleOnly];
+const visible = favorites;
 
 // Ids known to appear in Pi's registered catalog on some host; hidden unless visible.
 const knownIds = [
@@ -55,6 +42,10 @@ const knownIds = [
     "claude-sonnet-4-6",
     "claude-sonnet-5",
     "claude-opus-5",
+    "claude-fable-5-1",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
   ].map((m) => `anthropic/${m}`),
   ...[
     "gpt-4",
@@ -98,6 +89,10 @@ const knownIds = [
     "o3-mini",
     "o3-pro",
     "o4-mini",
+    "gpt-6-astra",
+    "gpt-6.1-sol",
+    "gpt-6.1-terra",
+    "gpt-6-luna",
   ].map((m) => `openai/${m}`),
   ...[
     "gpt-5.3-codex-spark",
@@ -161,18 +156,18 @@ settings.providerModelPreferences = {
 };
 settings.textGenerationModelSelection = {
   instanceId: "pi",
-  model: "openai/gpt-6-luna",
+  model: "auto/gpt-6-luna",
   options: [{ id: "thinking", value: "high" }],
 };
-// New threads start on Opus 5.5 (operator, 2026-10-30); the thinking level the host
-// already had is kept, else high.
+// New threads start on auto Opus 5.5 (operator, 2026-11-02); the thinking level the
+// host already had is kept, else high.
 settings.defaultModelSelection = {
   instanceId: "pi",
-  model: "anthropic/claude-opus-5-5",
+  model: "auto/opus-5-5",
   options: settings.defaultModelSelection?.options ?? [{ id: "thinking", value: "high" }],
 };
 
 NodeFS.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`);
 console.log(
-  `${NodeOS.hostname()}: favorites=${favorites.length} visible=${visible.length} hidden=${hidden.length} textgen=openai/gpt-6-luna default=anthropic/claude-opus-5-5`,
+  `${NodeOS.hostname()}: favorites=${favorites.length} visible=${visible.length} hidden=${hidden.length} textgen=auto/gpt-6-luna default=auto/opus-5-5`,
 );
