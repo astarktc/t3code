@@ -283,13 +283,15 @@ log "installed ✓ (asar $INSTALLED)"
 #    with ELECTRON_RUN_AS_NODE=1 (T3 spawns Pi under its bundled Electron-as-node), so a
 #    --detach install dispatched from inside T3 relaunched the app as a bare Node
 #    process with no script: it exited in ~30 ms with no desktop.startup span, and
-#    `open` still returned 0. Scrub every ELECTRON_*/T3_* variable before `open`.
+#    `open` still returned 0. Scrub every ELECTRON_*/T3_* variable before `open`, and
+#    every PI_* one: the calling Pi thread's PI_OFFLINE, PI_SESSION_ID, PI_MODEL and
+#    PI_CACHE_RETENTION would otherwise reach every Pi process the relaunched app starts.
 #    The exit code is not evidence; a process appearing AND staying is. Poll for it,
 #    retry `open` once, and fail with a message distinct from the migration/no-window
 #    hazard.
 launch_and_wait() {
   local v; local -a scrub=() names=()
-  for v in $(env | grep -oE '^(ELECTRON_[A-Z0-9_]*|T3_[A-Z0-9_]*)='); do
+  for v in $(env | grep -oE '^(ELECTRON_[A-Z0-9_]*|T3_[A-Z0-9_]*|PI_[A-Z0-9_]*)='); do
     scrub+=(-u "${v%=}"); names+=("${v%=}")
   done
   [[ ${#names[@]} -gt 0 ]] && log "scrubbing inherited launch env (README hazard 6): ${names[*]}"

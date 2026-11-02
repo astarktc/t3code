@@ -374,8 +374,9 @@ session is exempt, because it re-bootstraps at every launch.
    app back up on the OLD build, no `deploy.sh` process.
 6. **`open -a` passes the caller's environment to the app** — a Pi thread hosted by T3 runs
    with `ELECTRON_RUN_AS_NODE=1`, so a relaunch from inside T3 starts T3 Code as a bare Node
-   process that exits in ~30 ms with no `desktop.startup` span. `deploy.sh` scrubs every
-   `ELECTRON_*`/`T3_*` variable before `open`, polls `app_running`, retries once, and waits on a
+   process that exits in ~30 ms with no `desktop.startup` span; the thread's `PI_*` variables
+   (`PI_OFFLINE`, `PI_SESSION_ID`, `PI_MODEL`, `PI_CACHE_RETENTION`) would reach every Pi the
+   app starts. `deploy.sh` scrubs every `ELECTRON_*`/`T3_*`/`PI_*` variable before `open`, polls `app_running`, retries once, and waits on a
    300 s wall-clock readiness deadline; an "app did not launch" exit names the install as
    complete. General form: any agent inside T3 launching an Electron app via `open` inherits it.
 7. **Every path the installer verifies is an upstream contract** — when upstream moved the
