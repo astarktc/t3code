@@ -159,7 +159,7 @@ Per-patch invariants to grep on every new base:
   `PeerMcpClient.call`, the patch has stopped covering its invariant. Drop it when upstream ships
   renewable or sliding MCP/peer-link sessions; if the sliding pairing-session patch drops first,
   re-express this one on upstream's renewal.
-- **Collapsible Pinned** (own quality-of-life patch; upstream PR #19690, head `1d4dec0d1b`;
+- **Collapsible Pinned** (own quality-of-life patch; upstream PR #19690, head `0c586b3e0a`;
   branch `sidebar-collapse-pinned-patch` carries its diff as one commit; web-only): the Pinned
   shelf collapses like Working/Snoozed/Settled. Grep `apps/web/src/components/Sidebar.tsx`:
   `PINNED_SHELF_EXPANDED_KEY` (`t3code:sidebar:pinned-expanded`), `pinnedShelfExpanded` beside
@@ -168,31 +168,21 @@ Per-patch invariants to grep on every new base:
   `data-testid="sidebar-pinned-shelf-toggle"`), `collapsedPinnedOrder` passed into
   `resolveSidebarDropTarget` / `planSidebarThreadDrop` (`Sidebar.logic.ts`), and the
   pinned-toggle clamp in `createSidebarCollisionDetection` (`Sidebar.drag.ts`). The header
-  carries `role="treeitem"` / `data-sidebar-row="shelf:pinned"` like the other shelves, so
-  arrow keys reach it, and shows its count as the header accessory. Upstream's Boring sidebar
+  carries `data-sidebar-row="shelf:pinned"` and no ARIA role, like the other shelves'
+  `SidebarListMarkers.tsx` headers (since #26690 the threads sidebar has no `treeitem` roles,
+  and its keyboard navigation finds rows by `data-sidebar-row`), and shows its count as the
+  header accessory. When upstream changes the other shelf headers' attributes, Pinned's must
+  follow; the PR head still carries `role="treeitem"`. Upstream's Boring sidebar
   (project folders, #21039) renders Pinned through the same `pinned-header` case, with drag
   off, so it is not a separate site. When upstream
   adds a shelf-header site (a mobile sidebar, an extracted header component), Pinned must get
   the toggle there too. No command ids or keybindings. Drop it when #19690 or an equivalent
   merges; if Julius's branch moves, re-express from its new head.
-- **Short-lived Pi processes run offline** (upstream-bound fix: bug #30182, PR #30187; provider-pi
-  only, no migration, no contract change). Upstream merged it as `8be19ed3f1`, the PR head's exact
-  diff, so the next absorption drops `patched`'s commit: the rebase finds it already applied, or
-  else skip it. After the drop, `shortLived` and its four call sites are upstream code, and the
-  coverage check below still applies to every new spawn site.
-  The patch: T3 stops the Pi RPC processes it starts
-  for a job as soon as they answer (SIGTERM, then SIGKILL after 1 s; `taskkill /T /F` on
-  Windows). Pi's startup model-catalog refresh renews expired OAuth credentials, and a stop
-  mid-request loses the rotated single-use refresh token (`invalid_grant`). Grep
-  `packages/provider-pi/src/server/mcpInjection.ts`: `shortLived` in `buildPiRpcLaunch` appends
-  `--offline` after the launch args unless they already hold it. `shortLived: true` is passed
-  by `makePiDiscoveryConnection` (`status.ts`, used by the status probe `discoverPiViaRpc` and
-  by `discoverPiCommandsForCwd`), by `runPiJson` (`textGeneration.ts`) and by `forkLaunch` in
-  `forkThread` (`adapter.ts`). The thread launch in `openSession` does not pass it, so threads
-  follow the user's launch args. `rg -n 'buildPiRpcLaunch\(\{' -g '!*.test.ts' packages apps`
-  lists every Pi spawn site (four today). Any new one that T3 stops once it has answered must
-  pass `shortLived: true`; otherwise the patch has stopped covering its invariant. Drop it when
-  upstream runs its short-lived Pi spawns offline or stops them without cutting a refresh short.
+- **Short-lived Pi spawns stay offline** (upstream code since #30187, which was our patch; no
+  longer carried). `rg -n 'buildPiRpcLaunch\(\{' -g '!*.test.ts' packages apps` lists every Pi
+  spawn site (four today). Any new one that T3 stops once it has answered must pass
+  `shortLived: true`, or it can lose a rotated OAuth refresh token (`invalid_grant`, QM-301);
+  file that upstream.
 
 ## Upstream PR evidence — UI before/after on the same data
 
