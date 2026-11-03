@@ -175,8 +175,11 @@ Per-patch invariants to grep on every new base:
   adds a shelf-header site (a mobile sidebar, an extracted header component), Pinned must get
   the toggle there too. No command ids or keybindings. Drop it when #19690 or an equivalent
   merges; if Julius's branch moves, re-express from its new head.
-- **Short-lived Pi processes run offline** (upstream-bound fix; branch `pi-short-lived-offline`;
-  provider-pi only, no migration, no contract change): T3 stops the Pi RPC processes it starts
+- **Short-lived Pi processes run offline** (upstream-bound fix: bug #30182, PR #30187 from branch
+  `pi-short-lived-offline`; provider-pi only, no migration, no contract change). The branch is the
+  PR head, and `patched`'s commit should match its diff: replay the PR head at an absorption, then
+  fix review findings on the branch first.
+  The patch: T3 stops the Pi RPC processes it starts
   for a job as soon as they answer (SIGTERM, then SIGKILL after 1 s; `taskkill /T /F` on
   Windows). Pi's startup model-catalog refresh renews expired OAuth credentials, and a stop
   mid-request loses the rotated single-use refresh token (`invalid_grant`). Grep
