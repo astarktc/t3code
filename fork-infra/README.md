@@ -23,7 +23,7 @@ patched (this repo)       ← product patches, then ONE fork-infra commit
   stays for as long as it serves us, whatever upstream decides. Every patch has a drop row in the
   Quartermaster watch ledger (trigger: upstream ships equivalent behaviour). Each patch also lives
   alone on its own reference branch (`main` + the patch; today `usage-model-family`,
-  `auth-sliding-expiry`, `sidebar-collapse-pinned-patch`, `pi-short-lived-offline`, and
+  `auth-sliding-expiry`, `sidebar-collapse-pinned-patch`, and
   `peer-link-sliding-expiry`, which stacks on the sliding pairing-session commit it builds on), so
   it can be offered upstream as a clean diff.
 - **Remotes:** `upstream` = pingdotgg/t3code, `origin` = astarktc/t3code (public fork, backup of
@@ -175,10 +175,11 @@ Per-patch invariants to grep on every new base:
   adds a shelf-header site (a mobile sidebar, an extracted header component), Pinned must get
   the toggle there too. No command ids or keybindings. Drop it when #19690 or an equivalent
   merges; if Julius's branch moves, re-express from its new head.
-- **Short-lived Pi processes run offline** (upstream-bound fix: bug #30182, PR #30187 from branch
-  `pi-short-lived-offline`; provider-pi only, no migration, no contract change). The branch is the
-  PR head, and `patched`'s commit should match its diff: replay the PR head at an absorption, then
-  fix review findings on the branch first.
+- **Short-lived Pi processes run offline** (upstream-bound fix: bug #30182, PR #30187; provider-pi
+  only, no migration, no contract change). Upstream merged it as `8be19ed3f1`, the PR head's exact
+  diff, so the next absorption drops `patched`'s commit: the rebase finds it already applied, or
+  else skip it. After the drop, `shortLived` and its four call sites are upstream code, and the
+  coverage check below still applies to every new spawn site.
   The patch: T3 stops the Pi RPC processes it starts
   for a job as soon as they answer (SIGTERM, then SIGKILL after 1 s; `taskkill /T /F` on
   Windows). Pi's startup model-catalog refresh renews expired OAuth credentials, and a stop
