@@ -394,10 +394,12 @@ session is exempt, because it re-bootstraps at every launch.
 visible-only rows, hidden ids, the new-thread default and the text-generation model) into the
 host's `~/.t3/userdata/settings.json`; the server watches the file, so no restart. It is
 idempotent and keeps every other key. The set is the same on all four hosts. Only the budget
-router's `auto/*` models are visible, and they are the defaults: new threads start on
-`auto/opus-5-5`, and text generation runs on `auto/gpt-6-luna`. Each auto model picks
-subscription or Cortex per request (QM-306). The physical `anthropic/*`, `openai/*` and
-`cortex*/*` rows are hidden but still addressable by name. Copy it to a
+router's `auto/*` models are visible, and new threads start on `auto/opus-5-5`. Each auto
+model picks subscription or Cortex per request (QM-306). Text generation runs on the built-in
+`openai/gpt-6-luna`: T3 starts text-generation Pi with `--no-extensions`, where the
+extension-registered `auto/*` and `cortex*/*` models do not exist, and a failed title silently
+keeps the raw first prompt (QM-325). The physical `anthropic/*`, `openai/*` and `cortex*/*` rows
+are hidden but still addressable by name. Copy it to a
 remote host with `scp` and run it there; edit the script, not the hosts, when the canonical set
 changes.
 

@@ -154,9 +154,12 @@ settings.providerModelPreferences = {
   ...prefs,
   pi: { hiddenModels: hidden, modelOrder: [...visible, ...hidden] },
 };
+// Text generation runs Pi with --no-extensions (upstream textGeneration.ts), where the
+// extension-registered auto/* and cortex*/* models do not exist, so it takes a built-in
+// model (QM-325). While the OpenAI limit is exhausted, titles keep the raw first prompt.
 settings.textGenerationModelSelection = {
   instanceId: "pi",
-  model: "auto/gpt-6-luna",
+  model: "openai/gpt-6-luna",
   options: [{ id: "thinking", value: "high" }],
 };
 // New threads start on auto Opus 5.5 (operator, 2026-11-02); the thinking level the
@@ -169,5 +172,5 @@ settings.defaultModelSelection = {
 
 NodeFS.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`);
 console.log(
-  `${NodeOS.hostname()}: favorites=${favorites.length} visible=${visible.length} hidden=${hidden.length} textgen=auto/gpt-6-luna default=auto/opus-5-5`,
+  `${NodeOS.hostname()}: favorites=${favorites.length} visible=${visible.length} hidden=${hidden.length} textgen=openai/gpt-6-luna default=auto/opus-5-5`,
 );
