@@ -134,10 +134,15 @@ const knownIds = [
     "openai-gpt-5.4",
     "openai-gpt-5.2",
   ].flatMap((m) => [`cortex-responses/${m}`, `cortex-responses-staging/${m}`]),
-  ...["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5", "openai-gpt-5.2"].flatMap((m) => [
-    `cortex-openai/${m}`,
-    `cortex-openai-staging/${m}`,
-  ]),
+  ...[
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "openai-gpt-5.2",
+    "grok-4.7",
+    "glm-5.3",
+    "kimi-k3",
+  ].flatMap((m) => [`cortex-openai/${m}`, `cortex-openai-staging/${m}`]),
 ];
 
 const settings = JSON.parse(NodeFS.readFileSync(file, "utf8"));
