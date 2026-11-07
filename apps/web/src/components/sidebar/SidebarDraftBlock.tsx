@@ -15,6 +15,7 @@ import { useShallow } from "zustand/react/shallow";
 import { cn } from "~/lib/utils";
 import { resolveSidebarRowAccessibility } from "../Sidebar.logic";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
+import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   composerDraftHasUserContent,
@@ -150,6 +151,9 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   scopedProjectKeys: ReadonlySet<string> | null;
   routeDraftId: string | null;
+  /** Collapsed, the shelf lists only the draft you have open. */
+  expanded: boolean;
+  onToggleExpanded: () => void;
   onNavigateToDraft: (draftId: DraftId) => void;
   onDraftContextMenu: (
     draftId: DraftId,
@@ -214,9 +218,23 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   if (drafts.length === 0) {
     return null;
   }
+  const visibleDrafts = props.expanded
+    ? drafts
+    : drafts.filter(({ draftId }) => draftId === props.routeDraftId);
   return (
     <>
-      {drafts.map(({ composer, draftId, session }) => {
+      <li data-thread-selection-safe className="mx-0.5 h-8 list-none">
+        <CollapsibleSectionHeader
+          data-sidebar-row="shelf:drafts"
+          onClick={props.onToggleExpanded}
+          expanded={props.expanded}
+          data-testid="sidebar-drafts-shelf-toggle"
+          accessory={<span className="font-normal tabular-nums">{drafts.length}</span>}
+        >
+          Drafts
+        </CollapsibleSectionHeader>
+      </li>
+      {visibleDrafts.map(({ composer, draftId, session }) => {
         const projectKey = `${session.environmentId}:${session.projectId}`;
         return (
           <SidebarDraftRow
