@@ -13,6 +13,8 @@ const NO_TERMINAL_LABELS: ReadonlyMap<string, string> = new Map();
 function DraftBlock(props: {
   routeDraftId?: string | null;
   terminalLabels?: ReadonlyMap<string, string>;
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
 }) {
   const routeDraftId = props.routeDraftId ?? null;
   const terminalLabels = props.terminalLabels ?? NO_TERMINAL_LABELS;
@@ -26,6 +28,8 @@ function DraftBlock(props: {
       projectByKey={new Map()}
       projectDisplayNameByKey={new Map()}
       routeDraftId={routeDraftId}
+      expanded={props.expanded ?? true}
+      onToggleExpanded={props.onToggleExpanded ?? vi.fn()}
       onNavigateToDraft={vi.fn()}
       onDraftContextMenu={vi.fn()}
     />
@@ -137,4 +141,62 @@ it("lists empty drafts by terminal label while their terminal exists, active or 
   await screen.rerender(block(null));
   await expect.element(rows).toHaveAccessibleName("dev, Unsent draft");
   expect(rows.elements()).toHaveLength(1);
+});
+
+it("collapses the drafts to a count and keeps the open draft listed", async () => {
+  const initial = useComposerDraftStore.getState();
+  using _store = {
+    [Symbol.dispose]: () => useComposerDraftStore.setState(initial, true),
+  };
+  useComposerDraftStore.setState({
+    draftsByThreadKey: {},
+    draftThreadsByThreadKey: {},
+    logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+  });
+  const environmentId = EnvironmentId.make("draft-shelf-environment");
+  const openDraftId = DraftId.make("draft-shelf-open");
+  const parkedDraftId = DraftId.make("draft-shelf-parked");
+  initial.setProjectDraftThreadId(
+    scopeProjectRef(environmentId, ProjectId.make("draft-shelf-open-project")),
+    openDraftId,
+    { threadId: ThreadId.make("draft-shelf-open-thread") },
+  );
+  initial.setPrompt(openDraftId, "Open draft");
+  initial.setProjectDraftThreadId(
+    scopeProjectRef(environmentId, ProjectId.make("draft-shelf-parked-project")),
+    parkedDraftId,
+    { threadId: ThreadId.make("draft-shelf-parked-thread") },
+  );
+  initial.setPrompt(parkedDraftId, "Parked draft");
+  const onToggleExpanded = vi.fn();
+  const shelf = (expanded: boolean) => (
+    <ul>
+      <DraftBlock
+        routeDraftId={openDraftId}
+        expanded={expanded}
+        onToggleExpanded={onToggleExpanded}
+      />
+    </ul>
+  );
+  await using screen = await render(shelf(false));
+  const header = screen.getByTestId("sidebar-drafts-shelf-toggle");
+  const rowNames = () =>
+    screen
+      .getByTestId("sidebar-draft-row")
+      .elements()
+      .map((row) => row.getAttribute("aria-label"));
+
+  await expect.element(header).toHaveAttribute("aria-expanded", "false");
+  await expect.element(header).toHaveTextContent("Drafts2");
+  expect(header.element().getAttribute("data-sidebar-row")).toBe("shelf:drafts");
+  expect(header.element().hasAttribute("role")).toBe(false);
+  expect(rowNames()).toEqual(["Open draft, Unsent draft"]);
+
+  await header.click();
+  expect(onToggleExpanded).toHaveBeenCalledTimes(1);
+
+  await screen.rerender(shelf(true));
+  await expect.element(header).toHaveAttribute("aria-expanded", "true");
+  expect(rowNames()).toHaveLength(2);
+  expect(rowNames()).toContain("Parked draft, Unsent draft");
 });

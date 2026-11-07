@@ -14,6 +14,7 @@ import {
 } from "@t3tools/contracts";
 import { isMacPlatform } from "@t3tools/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
+import * as Schema from "effect/Schema";
 import { userEvent } from "vite-plus/test/browser";
 
 import { act, fakeTimers, render } from "../../test/render";
@@ -21,6 +22,7 @@ import { openCommandPalette } from "../commandPaletteBus";
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { makeThreadFixture } from "../test-fixtures";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { removeLocalStorageItem, setLocalStorageItem } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { __setClientSettingsForTests, getClientSettings } from "../hooks/useSettings";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
@@ -252,6 +254,54 @@ describe("sidebar numbered jumps", () => {
     await vi.waitFor(() =>
       expect(screen.router!.state.location.pathname).toBe(`/draft/${draftId}`),
     );
+  });
+
+  it("gives no number to a draft hidden by a collapsed Drafts shelf", async () => {
+    const initial = useComposerDraftStore.getState();
+    using stack = new DisposableStack();
+    stack.defer(() => useComposerDraftStore.setState(initial, true));
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+    setLocalStorageItem("t3code:sidebar:drafts-expanded", false, Schema.Boolean);
+    stack.defer(() => removeLocalStorageItem("t3code:sidebar:drafts-expanded"));
+    using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    const web = project("web");
+    vi.mocked(useProjects).mockReturnValue([web]);
+    const thread = threadShell(web.id, 0);
+    vi.mocked(useQuietThreadShells).mockReturnValue([thread]);
+    const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+    vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef });
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: null,
+      defaultProjectFallbackReady: true,
+      handleNewThread: vi.fn(),
+      routeDraftId: null,
+      routeThreadRef: threadRef,
+    });
+    const draftId = DraftId.make("collapsed-draft");
+    initial.setProjectDraftThreadId(scopeProjectRef(web.environmentId, web.id), draftId, {
+      threadId: ThreadId.make("collapsed-draft-thread"),
+      createdAt: "2026-01-02T00:00:00.000Z",
+    });
+    initial.setPrompt(draftId, "Unsent prompt");
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+    await expect
+      .element(screen.getByTestId("sidebar-drafts-shelf-toggle"))
+      .toHaveAttribute("aria-expanded", "false");
+    await expect.element(screen.getByTestId("sidebar-draft-row")).not.toBeInTheDocument();
+    await expect.element(screen.getByText("Thread 0").first()).toBeInTheDocument();
+    await userEvent.keyboard("{Control>}");
+    await expect.element(screen.getByText("Ctrl+1")).toBeVisible();
+    await expect.element(screen.getByText("Ctrl+2")).not.toBeInTheDocument();
+    await userEvent.keyboard("{/Control}");
   });
 });
 
