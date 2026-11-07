@@ -352,6 +352,7 @@ const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 const PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar:pinned-expanded";
+const DRAFTS_SHELF_EXPANDED_KEY = "t3code:sidebar:drafts-expanded";
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -1149,6 +1150,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const routeDraftIdForRows = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
   const draftTerminalLabels = useDraftTerminalLabels();
+  const [draftsShelfExpanded, setDraftsShelfExpanded] = useLocalStorage(
+    DRAFTS_SHELF_EXPANDED_KEY,
+    true,
+    Schema.Boolean,
+  );
+  const toggleDraftsShelf = () => setDraftsShelfExpanded((value) => !value);
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
     let count = 0;
     for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
@@ -1410,8 +1417,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     draftTerminalLabels,
   );
   // Draft rows sit above the threads, so jumps and traversal reach them first.
-  // Search hides them, so they drop out while it is open.
-  const listedDraftIds = isSearchingThreads ? EMPTY_DRAFT_IDS : draftIds;
+  // Search hides them, so they drop out while it is open; a collapsed Drafts shelf lists only
+  // the open draft, so the others take no jump number either.
+  const listedDraftIds = isSearchingThreads
+    ? EMPTY_DRAFT_IDS
+    : draftsShelfExpanded
+      ? draftIds
+      : draftIds.filter((id) => id === routeDraftIdForRows);
   const draftIdByRowKey = new Map<string, DraftId>(listedDraftIds.map((id) => [`draft:${id}`, id]));
   const orderedRowKeys = [...draftIdByRowKey.keys(), ...orderedThreadKeys];
   const routeDraftRowKey = `draft:${routeDraftIdForRows}`;
@@ -1998,6 +2010,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ?.map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
       .join("\n") ?? "",
     visibleDraftSessionCount,
+    draftsShelfExpanded,
     routeDraftIdForRows ?? "",
   ].join("\0");
   const listMotionAnimate =
@@ -3583,6 +3596,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         projectByKey={projectByKey}
                         projectDisplayNameByKey={projectDisplayNameByKey}
                         routeDraftId={routeDraftIdForRows}
+                        expanded={draftsShelfExpanded}
+                        onToggleExpanded={toggleDraftsShelf}
                         onNavigateToDraft={navigateToDraft}
                         onDraftContextMenu={handleDraftContextMenu}
                       />,
