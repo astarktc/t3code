@@ -334,6 +334,7 @@ const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 const PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar:pinned-expanded";
+const DRAFTS_SHELF_EXPANDED_KEY = "t3code:sidebar:drafts-expanded";
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -1131,6 +1132,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : { projectIds: scopedProjectRefs.map((projectRef) => projectRef.projectId) },
   );
   const routeDraftIdForRows = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
+  const [draftsShelfExpanded, setDraftsShelfExpanded] = useLocalStorage(
+    DRAFTS_SHELF_EXPANDED_KEY,
+    true,
+    Schema.Boolean,
+  );
+  const toggleDraftsShelf = () => setDraftsShelfExpanded((value) => !value);
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
     let count = 0;
     for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
@@ -1936,6 +1943,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ?.map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
       .join("\n") ?? "",
     visibleDraftSessionCount,
+    draftsShelfExpanded,
     routeDraftIdForRows ?? "",
   ].join("\0");
   const listMotionAnimate =
@@ -3407,6 +3415,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           projectDisplayNameByKey={projectDisplayNameByKey}
                           scopedProjectKeys={scopedProjectKeys}
                           routeDraftId={routeDraftIdForRows}
+                          expanded={draftsShelfExpanded}
+                          onToggleExpanded={toggleDraftsShelf}
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}
                         />,
