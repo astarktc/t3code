@@ -61,6 +61,9 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.
+New threads you have not sent yet sit under a **Drafts** header at the top of the inbox. On web
+and desktop, click it to collapse them to a count, so drafts you are not ready to start take one
+row; the draft you have open stays visible. A started thread with an unsent reply stays where it is.
 
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
