@@ -57,8 +57,8 @@ pre-commit (only `git commit` does), so `update.sh` is unaffected.
    discard the `pnpm-lock.yaml` churn those auto-installs leave. If a test fails in a file you just
    resolved, **baseline first**: `git checkout <newbase> -- <files>`, re-run, restore with
    `git checkout HEAD -- …` — upstream ships red tests.
-4. **Deploy** with `fork-infra/deploy.sh`: `--remote <host>` for other machines FIRST, `--local`
-   (`--detach` from inside a T3-hosted thread) for the session host LAST.
+4. **Deploy** with `fork-infra/deploy.sh`: `--remote <host>` for other machines, `--local`
+   (`--detach` from inside a T3-hosted thread) for the session host, in any order.
 5. **Record**: asar-hash parity on both Macs; prune superseded
    `~/.t3/userdata/statev2.sqlite.bak-*` on both, keeping the current schema's.
 
@@ -261,14 +261,14 @@ behind a sibling that then fails, and survives restarts (`select run_id, status 
 orchestration_v2_projection_runs where status in ('queued','running')` on the host's DB). Pass
 `--force` for that case once the query shows no `running` row.
 
-**Order: other machines first, the machine hosting your session LAST** — installing quits the
-app, which ends any session running inside it (T3 resumes an interrupted Pi thread on the next
-launch; only the dispatching tool call is lost).
+**Order does not matter.** Installing on the machine hosting your session quits the app and
+cuts off the dispatching tool call, and T3 resumes the thread where it left off on relaunch, so
+the session host can go first while another host waits for its active runs to finish.
 
 ```sh
 # from the MBP (the build machine), after update.sh has produced release/*.zip
 fork-infra/deploy.sh --remote mac-uni-auto   # work Mac: attached from a terminal (agents: below)
-fork-infra/deploy.sh --local                 # MBP last
+fork-infra/deploy.sh --local                 # MBP
 fork-infra/deploy.sh --local --detach        # ... when dispatching from a Pi thread inside T3
 fork-infra/install-from-inside.sh --repair <script> --expect-asar <hash16>   # quit → repair → deploy
 # install-from-inside.sh gives deploy.sh the one-run --detach allowance (its own dispatching run);
