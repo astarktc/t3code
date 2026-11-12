@@ -28,7 +28,7 @@ pnpm dist:desktop:win:x64   # -> release\T3-Code-<ver>-x64.exe (~8 min)
 `WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT` (80) files. Upstream builds Windows on Linux, where
 `scripts/prepare-server-compile-cache.cjs` (afterPack) skips the prepared server compile cache;
 a native build on the GPC generates it (about 14 files under `resources\server-compile-cache`),
-and with the transcription DLLs the payload is 81 files. `build.ps1` therefore raises the
+and with the transcription DLLs the payload is above 80 (89 files in 0.1.9). `build.ps1` therefore raises the
 guard to 120 in the build-only clone before packaging (the next build's `checkout -f` resets
 it). By hand, make the same edit. The cache is what our Windows hosts have always shipped:
 it speeds up server startup.
