@@ -186,8 +186,9 @@ Per-patch invariants to grep on every new base:
   `PeerMcpClient.call`, the patch has stopped covering its invariant. Drop it when upstream ships
   renewable or sliding MCP/peer-link sessions; if the sliding pairing-session patch drops first,
   re-express this one on upstream's renewal.
-- **Collapsible Pinned** (own quality-of-life patch; upstream PR #19690, head `0c586b3e0a`;
-  branch `sidebar-collapse-pinned-patch` carries its diff as one commit; web-only): the Pinned
+- **Collapsible Pinned** (own quality-of-life patch; upstream closed PR #19690 unmerged as
+  stale, head `0c586b3e0a`; branch `sidebar-collapse-pinned-patch` carries its diff as one
+  commit; web-only): the Pinned
   shelf collapses like Working/Snoozed/Settled. Grep `apps/web/src/components/Sidebar.tsx`:
   `PINNED_SHELF_EXPANDED_KEY` (`t3code:sidebar:pinned-expanded`), `pinnedShelfExpanded` beside
   `workingShelfExpanded` at every site (the `routeThreadOnly` filter, the `useSidebarThreads`
@@ -199,12 +200,12 @@ Per-patch invariants to grep on every new base:
   `SidebarListMarkers.tsx` headers (since #26690 the threads sidebar has no `treeitem` roles,
   and its keyboard navigation finds rows by `data-sidebar-row`), and shows its count as the
   header accessory. When upstream changes the other shelf headers' attributes, Pinned's must
-  follow; the PR head still carries `role="treeitem"`. Upstream's Boring sidebar
+  follow. Upstream's Boring sidebar
   (project folders, #21039) renders Pinned through the same `pinned-header` case, with drag
   off, so it is not a separate site. When upstream
   adds a shelf-header site (a mobile sidebar, an extracted header component), Pinned must get
-  the toggle there too. No command ids or keybindings. Drop it when #19690 or an equivalent
-  merges; if Julius's branch moves, re-express from its new head.
+  the toggle there too. No command ids or keybindings. Drop it if upstream ships a collapsible
+  Pinned shelf.
 - **Collapsible Drafts** (own quality-of-life patch; branch `sidebar-collapse-drafts`; web-only):
   the unsent new-thread drafts at the top of the inbox sit under a **Drafts** header that
   collapses them to a count, like Pinned. Grep `apps/web/src/components/Sidebar.tsx`:
