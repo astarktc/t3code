@@ -31,7 +31,19 @@ patched (this repo)       ← product patches, then ONE fork-infra commit
   `archive/trial-*` tags on `origin` (including the worked migration-repair scripts).
 
 Keep the stack consolidated: commit fork-infra edits as `git commit --fixup=':/^fork-infra:'`;
-`update.sh` rebases with `--autosquash`, so they fold into the one fork-infra commit.
+`update.sh` rebases with `--autosquash`, so they fold into the one fork-infra commit. Outside
+`update.sh`, autosquash onto the current base sha:
+`GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash $(git merge-base patched upstream/main)`, never
+onto `upstream/main` itself, which is often fetched ahead and silently moves the base. After any
+rebase outside `update.sh`, run `pnpm install` once before parallel typechecks: `pnpm exec`
+auto-installs in each shell, and the installs race.
+
+**Reference branches** stay where they were last offered and lag `patched` in between. Before
+offering a patch upstream, move its branch onto the current base, carrying over any conflict
+resolution its `patched` commit got. `usage-model-family` is checked out in the worktree
+`~/Projects/forks/t3code-pr1`, so move it there (`git reset --keep`), not with `git branch -f`.
+To restack `patched` onto an already-rebased PR branch:
+`update.sh --base origin/usage-model-family --old-base <old PR head>`.
 
 **Git hooks.** `fork-infra/githooks/pre-commit` runs gitleaks on the staged changes (warns and
 passes when gitleaks is missing), then chains to upstream's Vite+ dispatcher
@@ -46,7 +58,8 @@ pre-commit (only `git commit` does), so `update.sh` is unaffected.
 1. `fork-infra/update.sh` — fetch, `--onto` rebase of exactly our commits, migration and
    auth-scope tripwires, backup push, `pnpm install`, packaged build. It **exits at a rebase conflict**; after
    resolving one, run its later steps by hand (the tripwire comparison is the one most easily
-   skipped).
+   skipped). `main` moves several times a day, so an absorption can fall a few commits behind
+   while it runs; `update.sh --no-build` plus `git range-diff` absorbs that tail cheaply.
 2. **Patch triage against the new base — by invariant and intent, not by conflict** (below).
 3. **Verify**: `tsc --noEmit` in every package a patch touches, plus the suites covering them
    (`<repo>/node_modules/.bin/vp test run <paths>` from the app dir). Typecheck the way each
@@ -56,7 +69,13 @@ pre-commit (only `git commit` does), so `update.sh` is unaffected.
    print suggestions too. `pnpm exec …` auto-installs in every shell, so parallel runs race;
    discard the `pnpm-lock.yaml` churn those auto-installs leave. If a test fails in a file you just
    resolved, **baseline first**: `git checkout <newbase> -- <files>`, re-run, restore with
-   `git checkout HEAD -- …` — upstream ships red tests.
+   `git checkout HEAD -- …` — upstream ships red tests. Known local red: `ClaudeSkills.test.ts`
+   "merges plugin enablement…" fails on pure upstream on the MBP while upstream CI is green
+   (Quartermaster QM-327). Full-suite failures are not baselined (QM-230), so claim only the
+   suites you ran. After upstream bumps Playwright, the browser project fails to launch until
+   `node_modules/.bin/playwright install chromium-headless-shell` runs once from `apps/web`.
+   Usage and Settings are route modals (`AppRouteModal` portals to `body`), so page tests read
+   `[data-app-modal]`.
 4. **Deploy** with `fork-infra/deploy.sh`: `--remote <host>` for other machines, `--local`
    (`--detach` from inside a T3-hosted thread) for the session host, in any order.
 5. **Record**: asar-hash parity on both Macs; prune superseded
@@ -112,6 +131,7 @@ Both directions have bitten:
   to its built-in defaults only while the server config is missing, so the new key works briefly
   after launch and then stops. After deploying such a patch, rewrite that command's entry on every
   host (back up the file first; the server reloads it live), or rebind it in Settings → Keybindings.
+  A client's shortcuts come from its primary (local) server's file.
 - **Drop a superseded patch before running `update.sh`**, not mid-rebase:
   `git rebase -i <old-base> patched` with the patch set to `drop`, then
   `git diff <backup-ref> patched --stat` must list exactly that patch's files.
@@ -131,7 +151,9 @@ Per-patch invariants to grep on every new base:
   `STATIC_KEYBINDING_COMMANDS`, the `h`/`m` defaults, and `GROUP_BY_OPTIONS` in
   `usageShortcuts.ts` and the Settings order. When upstream adds a per-provider surface to
   the Usage page, it must take a `UsageSeries` too, or Model mode silently shows harness
-  data there. Drop the patch if upstream ships its own model/vendor grouping on Usage.
+  data there. The Usage header renders Group by leftmost and drops it and the period on
+  Limits, so the metric tabs never move; `UsagePage.groupBy.browser.test.tsx` covers that order
+  and the Limits header. Drop the patch if upstream ships its own model/vendor grouping on Usage.
 - **Sliding pairing-session expiry** (own quality-of-life patch; branch `auth-sliding-expiry`,
   server-only, no migration): a paired client lapses only after `SESSION_IDLE_TTL` (90 days)
   idle, not a fixed term after pairing. Grep `apps/server/src/auth/SessionStore.ts`:
@@ -259,7 +281,11 @@ The active-run guard counts `queued` runs too. A run that is queued for hours wh
 running is an orphan, not work: a scheduled thread can deliver twice, and the second run queues
 behind a sibling that then fails, and survives restarts (`select run_id, status from
 orchestration_v2_projection_runs where status in ('queued','running')` on the host's DB). Pass
-`--force` for that case once the query shows no `running` row.
+`--force` for that case once the query shows no `running` row. Never `--force` past another
+thread's running run without the operator's word; wait for the host to go idle instead. One
+orphan has occurred (work Mac, 2026-10-28). A second on any host is the trigger to file the
+non-draining queued run upstream, with the run rows and the matching
+`scheduled_task_webhook_deliveries` rows as evidence (Quartermaster QM-288).
 
 **Order does not matter.** Installing on the machine hosting your session quits the app and
 cuts off the dispatching tool call, and T3 resumes the thread where it left off on relaunch, so
@@ -362,6 +388,10 @@ and dry-run the new migrations on copies first: `fork-infra/dry-run-migrations.s
 opens each copy through the server's real startup layer and reports the ledger, the
 migration time and `integrity_check` (how to make the copies: the script's header).
 
+Since upstream `bf8ffe81a6` the server refuses to start (`BadState`) when a recorded migration id
+55 or above carries a name different from the code's, so a ledger renamed by a repair script
+crash-loops instead of silently drifting.
+
 The live DB is `~/.t3/userdata/statev2.sqlite`; `state.sqlite` is the frozen V1 file.
 
 ## Auth-scope hazard — new scopes strand every existing pairing
@@ -401,7 +431,8 @@ for 90 days needs a new pairing code from its target. Check a host with
 `sqlite3 ~/.t3/userdata/statev2.sqlite "select client_label, last_connected_at, expires_at from
 auth_sessions where revoked_at is null"`: a session whose `expires_at` has not moved past its
 issue-time value has not connected since this build was installed. Each host's own desktop
-session is exempt, because it re-bootstraps at every launch.
+session is exempt, because it re-bootstraps at every launch. Listing links (Settings,
+`t3_environment_links`) renews nothing; a real tool call over the link does.
 
 ## Install and dispatch hazards (all handled by `deploy.sh`)
 
@@ -472,6 +503,27 @@ Triage order for "the app won't stay up":
 
 A false provider-probe "timed out" at launch is an event-loop stall, not the provider: find the
 long `sql.execute` (node:sqlite is synchronous) overlapping the probe span.
+
+Other symptoms, and where to look first:
+
+- **A feature disappeared** → upstream's settings defaults, before the patch list: a default
+  flip is invisible in the carried diff.
+- **A thread says "Continue where you left off." after a deploy or restart** → upstream #18461
+  defaults `continueThreadsAfterServerUpdate` to true (at most 3 chained continuations; skipped
+  while a thread waits on the user). Turn it off in Settings if unwanted.
+- **A shortcut works briefly after launch, then stops** → the keybinding hazard (Patch triage).
+- **A remote environment lost Usage, file views or settings after an upgrade** → the auth-scope
+  hazard: re-pair that client, then check `auth_sessions.scopes` on the host.
+- **A paired client disconnected and cannot reconnect** → it sat idle 90 days (Pairings also
+  expire): check `expires_at` and `last_connected_at` on the host, and re-pair.
+- **Unknown "LAN · found automatically" routes on a remote environment** → the server host's
+  virtual adapters (VirtualBox host-only 192.168.56.x, Windows Mobile hotspot 192.168.137.x, a
+  VPN or security client's utun in 198.18.0.0/15), which upstream advertises (#17246). They are
+  unreachable but harmless while a working route exists.
+- **`deploy.sh` aborts on active runs while the host looks idle** → the orphan query in the
+  `deploy.sh` section.
+- **Windows** symptoms (a silent `install.ps1`, `FAILED:` on a native command's progress output)
+  → `windows/README.md`.
 
 After `DEPLOY OK` nothing is routinely left for a human. The agent compares the asar hash
 across both Macs, and each patch's feature is proven by its tests at absorption (Group by:

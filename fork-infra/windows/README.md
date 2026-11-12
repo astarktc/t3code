@@ -67,7 +67,10 @@ it speeds up server startup.
 text (raw `powershell -Command` over Windows OpenSSH hides them in CLIXML): a thrown error
 prints `FAILED: …` and exits 1. The script travels over ssh's stdin, because Windows
 OpenSSH runs the remote command through `cmd.exe`, whose 8191-character limit a script
-the size of `install.ps1` exceeds. Output arrives only when the script ends.
+the size of `install.ps1` exceeds. Output arrives only when the script ends. A script that
+prints `FAILED:` on a native command's progress output hit PowerShell 5.1 turning native stderr
+into a terminating error under `$ErrorActionPreference = 'Stop'`: run that command under
+`Continue` and check `$LASTEXITCODE`.
 
 1. Copy the installer over and run it silently (`/S`); it installs per-user to
    `%LOCALAPPDATA%\Programs\t3code`. The artifact carries no `app-update.yml`, so the
