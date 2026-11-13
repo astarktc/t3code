@@ -84,14 +84,25 @@ fi
 git checkout "$BRANCH"
 
 # 1b. Rollback branch at the pre-absorption head, on origin before anything is rewritten.
+#     A branch of this name that exists already (here or on origin) is never moved:
+#     in a re-run, or in another clone, HEAD is no longer the deployed build.
 if [[ -n "$BACKUP_BRANCH" ]]; then
-  if git show-ref --verify --quiet "refs/heads/$BACKUP_BRANCH"; then
-    echo "== rollback branch $BACKUP_BRANCH exists at $(git rev-parse --short "$BACKUP_BRANCH"); kept (HEAD is $(git rev-parse --short HEAD))"
+  REMOTE_BACKUP=$(git ls-remote --heads origin "refs/heads/$BACKUP_BRANCH" | cut -f1)
+  LOCAL_BACKUP=$(git rev-parse -q --verify "refs/heads/$BACKUP_BRANCH" || true)
+  if [[ -n "$REMOTE_BACKUP" && -n "$LOCAL_BACKUP" && "$REMOTE_BACKUP" != "$LOCAL_BACKUP" ]]; then
+    echo "ERROR: $BACKUP_BRANCH is ${LOCAL_BACKUP:0:10} here and ${REMOTE_BACKUP:0:10} on origin — settle which is the rollback point, then re-run." >&2
+    exit 1
+  elif [[ -n "$LOCAL_BACKUP" ]]; then
+    echo "== rollback branch $BACKUP_BRANCH exists at ${LOCAL_BACKUP:0:10}; kept (HEAD is $(git rev-parse --short HEAD))"
+  elif [[ -n "$REMOTE_BACKUP" ]]; then
+    git fetch origin "refs/heads/$BACKUP_BRANCH"
+    git branch "$BACKUP_BRANCH" "$REMOTE_BACKUP"
+    echo "== rollback branch $BACKUP_BRANCH exists on origin at ${REMOTE_BACKUP:0:10}; kept (HEAD is $(git rev-parse --short HEAD))"
   else
     git branch "$BACKUP_BRANCH" HEAD
     echo "== rollback branch $BACKUP_BRANCH = $(git rev-parse --short HEAD)"
   fi
-  if [[ $DO_PUSH -eq 1 ]]; then
+  if [[ $DO_PUSH -eq 1 && -z "$REMOTE_BACKUP" ]]; then
     git push origin "$BACKUP_BRANCH"
   fi
 fi

@@ -92,8 +92,9 @@ fork-infra/update.sh --ticket <N> [--base <remote>/<branch>] [--old-base <sha>] 
    **Rollback branch**: creates `backup/pre-qm<N>` at the current `patched` head, before the
    rebase, and pushes it to `origin`. `--ticket` takes the absorption's work item (`QM-380`,
    `qm380` or `380`) and is required unless `--no-backup`. A branch of that name that already
-   exists stays where it is, so a re-run within one absorption (`--no-build` for the tail)
-   keeps pointing at the deployed build. The branch is the only way back to that build: a
+   exists, here or on `origin`, stays where it is, so a re-run within one absorption
+   (`--no-build` for the tail) keeps pointing at the deployed build; the script stops when the
+   two copies disagree. The branch is the only way back to that build: a
    rebuild of the same version overwrites the release zip and the Windows exe under the same
    names, so a rollback rebuilds from it. Delete the branch, locally and on `origin`, after a
    quiet week on the new build.
