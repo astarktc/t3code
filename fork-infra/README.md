@@ -43,7 +43,7 @@ offering a patch upstream, move its branch onto the current base, carrying over 
 resolution its `patched` commit got. `usage-model-family` is checked out in the worktree
 `~/Projects/forks/t3code-pr1`, so move it there (`git reset --keep`), not with `git branch -f`.
 To restack `patched` onto an already-rebased PR branch:
-`update.sh --base origin/usage-model-family --old-base <old PR head>`.
+`update.sh --ticket <N> --base origin/usage-model-family --old-base <old PR head>`.
 
 **Git hooks.** `fork-infra/githooks/pre-commit` runs gitleaks on the staged changes (warns and
 passes when gitleaks is missing), then chains to upstream's Vite+ dispatcher
@@ -55,11 +55,12 @@ pre-commit (only `git commit` does), so `update.sh` is unaffected.
 
 ## Absorption checklist (run the scripts, never improvise)
 
-1. `fork-infra/update.sh` — fetch, `--onto` rebase of exactly our commits, migration and
+1. `fork-infra/update.sh --ticket <N>` — rollback branch `backup/pre-qm<N>` at the deployed head
+   (pushed), fetch, `--onto` rebase of exactly our commits, migration and
    auth-scope tripwires, backup push, `pnpm install`, packaged build. It **exits at a rebase conflict**; after
    resolving one, run its later steps by hand (the tripwire comparison is the one most easily
    skipped). `main` moves several times a day, so an absorption can fall a few commits behind
-   while it runs; `update.sh --no-build` plus `git range-diff` absorbs that tail cheaply.
+   while it runs; `update.sh --ticket <N> --no-build` plus `git range-diff` absorbs that tail cheaply.
 2. **Patch triage against the new base — by invariant and intent, not by conflict** (below).
 3. **Verify**: `tsc --noEmit` in every package a patch touches, plus the suites covering them
    (`<repo>/node_modules/.bin/vp test run <paths>` from the app dir). Typecheck the way each
@@ -84,10 +85,18 @@ pre-commit (only `git commit` does), so `update.sh` is unaffected.
 ## `update.sh`
 
 ```
-fork-infra/update.sh [--base <remote>/<branch>] [--old-base <sha>] [--no-build] [--install] [--no-push]
+fork-infra/update.sh --ticket <N> [--base <remote>/<branch>] [--old-base <sha>] [--no-build] [--install] [--no-push] [--no-backup]
 ```
 
 1. **Guard**: refuses to run on a dirty worktree.
+   **Rollback branch**: creates `backup/pre-qm<N>` at the current `patched` head, before the
+   rebase, and pushes it to `origin`. `--ticket` takes the absorption's work item (`QM-380`,
+   `qm380` or `380`) and is required unless `--no-backup`. A branch of that name that already
+   exists stays where it is, so a re-run within one absorption (`--no-build` for the tail)
+   keeps pointing at the deployed build. The branch is the only way back to that build: a
+   rebuild of the same version overwrites the release zip and the Windows exe under the same
+   names, so a rollback rebuilds from it. Delete the branch, locally and on `origin`, after a
+   quiet week on the new build.
 2. **Rebase**: `git rebase --autosquash --onto <new base> <old base> patched`, replaying exactly
    our commits. The old base defaults to the merge-base with `upstream/main`, which cannot go
    stale because `main` is never rewritten. `--base` stacks on a long-lived upstream feature
@@ -100,7 +109,8 @@ fork-infra/update.sh [--base <remote>/<branch>] [--old-base <sha>] [--no-build] 
    tripwire** diffs the scope constants in `packages/contracts/src/auth.ts` and the members of
    `AuthStandardClientScopes`, and warns when upstream adds scopes or a new pairing starts
    granting more (auth-scope hazard, below).
-4. **Backup**: force-with-lease push of `patched` to `origin` (`--no-push` skips).
+4. **Backup**: force-with-lease push of `patched` to `origin` (`--no-push` skips this and the
+   rollback branch's push).
 5. **Build**: unsigned arm64 packaged build with the publish-repo env vars unset, so
    electron-builder emits no `app-update.yml` and the updater self-disables; `sign-mac.sh` then
    signs the zip's app with our Apple team identity (Code signing), and the bundle is checked for the

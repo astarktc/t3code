@@ -7,8 +7,15 @@
 #   origin   = astarktc/t3code    (our public GitHub fork; backup of the branch)
 #   patched  = upstream/main + our product patches + one fork-infra commit
 #
-# Usage: fork-infra/update.sh [--base <remote>/<branch>] [--old-base <sha>]
-#                             [--no-build] [--install] [--no-push]
+# Usage: fork-infra/update.sh --ticket <N> [--base <remote>/<branch>] [--old-base <sha>]
+#                             [--no-build] [--install] [--no-push] [--no-backup]
+#   --ticket <N>      the absorption's work item (QM-380, qm380 or 380). Names the
+#                     rollback branch backup/pre-qm<N>, created at the current
+#                     head before the rebase and pushed to origin. Required
+#                     unless --no-backup. A branch of that name that already
+#                     exists is kept where it is (a re-run in one absorption).
+#   --no-backup       create no rollback branch (a dry run, or a re-run whose
+#                     branch exists under another ticket)
 #   --base <ref>      upstream branch to stack on (default upstream/main). Use it
 #                     only to ride a long-lived upstream feature branch.
 #   --old-base <sha>  the base commit the branch sits on now. Default: the
@@ -17,7 +24,8 @@
 #                     sits on a different or force-pushed base.
 #   --no-build        fetch + rebase + pnpm install only
 #   --install         after building, deploy onto THIS machine via deploy.sh --local
-#   --no-push         skip force-pushing the rebased branch to origin
+#   --no-push         push nothing to origin: neither the rollback branch nor the
+#                     rebased branch
 #
 # Keep the stack consolidated: commit later fork-infra edits with
 #   git commit --fixup=':/^fork-infra:'
@@ -33,7 +41,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 BRANCH=patched
 BASE_REF=upstream/main
 
-DO_BUILD=1 DO_INSTALL=0 DO_PUSH=1 OLD_BASE_ARG=""
+DO_BUILD=1 DO_INSTALL=0 DO_PUSH=1 DO_BACKUP=1 OLD_BASE_ARG="" TICKET=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --base)     BASE_REF="${2:?--base needs <remote>/<branch>}"; shift ;;
@@ -41,12 +49,26 @@ while [[ $# -gt 0 ]]; do
     --no-build) DO_BUILD=0 ;;
     --install)  DO_INSTALL=1 ;;
     --no-push)  DO_PUSH=0 ;;
+    --ticket)   TICKET="${2:?--ticket needs a work item number}"; shift ;;
+    --no-backup) DO_BACKUP=0 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
   shift
 done
 REMOTE=${BASE_REF%%/*}
 REMOTE_BRANCH=${BASE_REF#*/}
+
+# A same-version rebuild overwrites the release zip and the Windows exe under the
+# same names, so the rollback branch is the only way back to the deployed build.
+BACKUP_BRANCH=""
+if [[ $DO_BACKUP -eq 1 ]]; then
+  TICKET_NUM=$(printf '%s' "$TICKET" | tr '[:upper:]' '[:lower:]' | sed -E 's/^qm-?//')
+  if ! [[ "$TICKET_NUM" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: pass --ticket <N> (the absorption's work item; names the rollback branch backup/pre-qm<N>), or --no-backup." >&2
+    exit 2
+  fi
+  BACKUP_BRANCH="backup/pre-qm$TICKET_NUM"
+fi
 
 # 1. Guard: clean worktree
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -60,6 +82,20 @@ fi
 #    rewritten. A force-pushed feature base is the one case that needs
 #    --old-base (the recorded sha the branch actually sits on).
 git checkout "$BRANCH"
+
+# 1b. Rollback branch at the pre-absorption head, on origin before anything is rewritten.
+if [[ -n "$BACKUP_BRANCH" ]]; then
+  if git show-ref --verify --quiet "refs/heads/$BACKUP_BRANCH"; then
+    echo "== rollback branch $BACKUP_BRANCH exists at $(git rev-parse --short "$BACKUP_BRANCH"); kept (HEAD is $(git rev-parse --short HEAD))"
+  else
+    git branch "$BACKUP_BRANCH" HEAD
+    echo "== rollback branch $BACKUP_BRANCH = $(git rev-parse --short HEAD)"
+  fi
+  if [[ $DO_PUSH -eq 1 ]]; then
+    git push origin "$BACKUP_BRANCH"
+  fi
+fi
+
 git fetch "$REMOTE" "$REMOTE_BRANCH"
 NEW_BASE=$(git rev-parse "$BASE_REF")
 OLD_BASE=$(git rev-parse "${OLD_BASE_ARG:-$(git merge-base "$BRANCH" "$BASE_REF")}")
@@ -193,3 +229,6 @@ if [[ $DO_BUILD -eq 1 ]]; then
 fi
 
 echo "== done. Threads, pairing and settings live in ~/.t3 and carry over."
+if [[ -n "$BACKUP_BRANCH" ]]; then
+  echo "== rollback: $BACKUP_BRANCH (local$([[ $DO_PUSH -eq 1 ]] && echo ' + origin')). Delete it after a quiet week on the new build."
+fi
