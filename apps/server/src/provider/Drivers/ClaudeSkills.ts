@@ -1,3 +1,4 @@
+import type { Settings as ClaudeSdkSettings } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeSettings, ServerProviderSkill } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -5,7 +6,7 @@ import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
+import { parseCliArgs, tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { parse as parseYamlDocument } from "yaml";
@@ -144,6 +145,58 @@ function claudeSettingsPaths(
     ...(managedPath ? [managedPath] : []),
   ];
 }
+
+export class ClaudeSettingsLaunchArgError extends Schema.TaggedError<ClaudeSettingsLaunchArgError>()(
+  "ClaudeSettingsLaunchArgError",
+  {
+    path: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Claude could not read the --settings launch argument${this.path === undefined ? "" : ` at ${this.path}`} as a JSON object. Fix it in the Claude launch arguments, then send the message again.`;
+  }
+}
+
+const decodeClaudeLaunchArgSettings = Schema.decodeUnknownEffect(
+  fromLenientJson(Schema.Record(Schema.String, Schema.Unknown)),
+);
+
+/**
+ * Reads the --settings launch argument: a value starting with a brace is inline
+ * JSON, anything else is a file path that expands a leading ~ and is otherwise
+ * relative to the thread's cwd (the project or its worktree).
+ * makeClaudeQueryOptions merges the result beneath T3's own settings.
+ */
+export const readClaudeLaunchArgSettings = Effect.fn("ClaudeAdapterV2.readLaunchArgSettings")(
+  function* (input: {
+    readonly settings: Pick<ClaudeSettings, "launchArgs"> | undefined;
+    readonly cwd: string | null;
+    readonly fileSystem: FileSystem.FileSystem;
+    readonly path: Path.Path;
+  }) {
+    if (input.settings === undefined) return undefined;
+    const value = parseCliArgs(input.settings.launchArgs).flags.settings;
+    if (value === undefined) return undefined;
+    const trimmed = value?.trim() ?? "";
+    if (trimmed.length === 0) return yield* new ClaudeSettingsLaunchArgError({});
+    // The CLI also wants a closing brace, but then malformed JSON, secrets included, would
+    // become the file path in the error message.
+    if (trimmed.startsWith("{")) {
+      return (yield* decodeClaudeLaunchArgSettings(trimmed).pipe(
+        Effect.mapError((cause) => new ClaudeSettingsLaunchArgError({ cause })),
+      )) as ClaudeSdkSettings;
+    }
+    const filePath = input.path.resolve(
+      input.cwd ?? ".",
+      expandHomePath(trimmed, yield* HostProcess.HomeDirectory),
+    );
+    return (yield* input.fileSystem.readFileString(filePath).pipe(
+      Effect.flatMap(decodeClaudeLaunchArgSettings),
+      Effect.mapError((cause) => new ClaudeSettingsLaunchArgError({ path: filePath, cause })),
+    )) as ClaudeSdkSettings;
+  },
+);
 
 // Untraced: skill discovery resolves every distinct plugin project path, too often for spans.
 const findRepositoryRoot = Effect.fnUntraced(function* (
@@ -568,9 +621,16 @@ const decodeSettingsEnv = Schema.decodeUnknownEffect(
   fromLenientJson(Schema.Struct({ env: Schema.optional(SettingsEnv) })),
 );
 
-/** The `env` values T3 Code reads from Claude's user and managed settings; later files win. */
+const decodeLaunchArgSettingsEnv = Schema.decodeUnknownEffect(
+  Schema.Struct({ env: Schema.optional(SettingsEnv) }),
+);
+
+/**
+ * The `env` values T3 Code reads from Claude's user settings, the instance's --settings launch
+ * argument and managed settings; later layers win, as in Claude Code.
+ */
 export const readClaudeSettingsEnv = Effect.fn("readClaudeSettingsEnv")(function* (
-  config: Pick<ClaudeSettings, "homePath">,
+  config: Pick<ClaudeSettings, "homePath"> & Partial<Pick<ClaudeSettings, "launchArgs">>,
   cwd: string | undefined,
   environment: NodeJS.ProcessEnv,
 ): Effect.fn.Return<typeof SettingsEnv.Type, never, FileSystem.FileSystem | Path.Path> {
@@ -578,21 +638,33 @@ export const readClaudeSettingsEnv = Effect.fn("readClaudeSettingsEnv")(function
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const configDirPath = yield* resolveClaudeConfigDirPath(config, environment, cwd);
-  const settingsEnv: typeof SettingsEnv.Type = {};
-  for (const settingsPath of claudeSettingsPaths(
+  const managedPath = claudeManagedSettingsPath(path, platform, environment);
+  const readFileEnv = (settingsPath: string) =>
+    fileSystem.readFileString(settingsPath).pipe(
+      Effect.flatMap(decodeSettingsEnv),
+      Effect.map((parsed) => parsed.env),
+      Effect.orElseSucceed(() => undefined),
+    );
+  // An unreadable --settings value fails the turn that uses it; here it adds no layer.
+  const launchArgEnv = readClaudeLaunchArgSettings({
+    settings: config.launchArgs === undefined ? undefined : { launchArgs: config.launchArgs },
+    cwd: cwd ?? null,
+    fileSystem,
     path,
-    configDirPath,
-    undefined,
-    platform,
-    environment,
-  )) {
-    const contents = yield* fileSystem
-      .readFileString(settingsPath)
-      .pipe(Effect.orElseSucceed(() => undefined));
-    if (contents === undefined) continue;
-    const parsed = yield* decodeSettingsEnv(contents).pipe(Effect.orElseSucceed(() => undefined));
-    Object.assign(settingsEnv, parsed?.env);
-  }
+  }).pipe(
+    Effect.flatMap((settings) => decodeLaunchArgSettingsEnv(settings ?? {})),
+    Effect.map((parsed) => parsed.env),
+    Effect.orElseSucceed(() => undefined),
+  );
+  const layers = [
+    ...claudeSettingsPaths(path, configDirPath, undefined, platform, environment)
+      .filter((settingsPath) => settingsPath !== managedPath)
+      .map(readFileEnv),
+    launchArgEnv,
+    ...(managedPath ? [readFileEnv(managedPath)] : []),
+  ];
+  const settingsEnv: typeof SettingsEnv.Type = {};
+  for (const layer of layers) Object.assign(settingsEnv, yield* layer);
   return settingsEnv;
 });
 
