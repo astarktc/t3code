@@ -34,7 +34,7 @@ import {
   hasClaudeManagedMcpConfig,
   makeClaudeEnvironment,
 } from "../provider/Drivers/ClaudeHome.ts";
-import { readClaudeLaunchArgSettings } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
+import { readClaudeLaunchArgSettings } from "../provider/Drivers/ClaudeSkills.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
 /** `--tools` takes bare names; patterns go in the allow list. */
