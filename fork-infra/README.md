@@ -81,6 +81,12 @@ pre-commit (only `git commit` does), so `update.sh` is unaffected.
    (`--detach` from inside a T3-hosted thread) for the session host, in any order.
 5. **Record**: asar-hash parity on both Macs; prune superseded
    `~/.t3/userdata/statev2.sqlite.bak-*` on both, keeping the current schema's.
+6. **Refresh our open upstream PRs** onto the base just absorbed
+   (`gh pr list -R pingdotgg/t3code --author astarktc --state open`): rebase a branch that is ours
+   alone and `--force-with-lease` it; on a branch a maintainer has taken over, push only a plain
+   merge of `main`. A PR left behind gets `needs-rebase`, closes after 7 days in conflict, and an
+   old one is bulk-closed (Quartermaster `research/dev-workflow_t3code-upstream-contribution.md`,
+   lesson 6).
 
 ## `update.sh`
 
