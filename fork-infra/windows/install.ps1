@@ -2,7 +2,8 @@
 # Run from the MBP:  ./wps.sh <host> < install.ps1   (copy T3-Code-<ver>-x64.exe to the
 # host's %TEMP% first). Quits the app, backs up statev2.sqlite, installs silently, refuses
 # an app-update.yml, re-points the logon task and the firewall rule at the installed exe,
-# relaunches via the logon task, waits for readiness, checks 20 s survival.
+# relaunches via the logon task, waits for readiness, checks 20 s survival, then keeps only
+# the newest 2 statev2.sqlite.bak-* sets.
 # Before running: no active runs on the host, and a dry run of the new migrator on a copy of
 # its statev2.sqlite (fork-infra/README.md, migration hazard section).
 $ErrorActionPreference = 'Stop'
@@ -56,4 +57,14 @@ if (-not $ok) { throw "readiness never 200" }
 Start-Sleep 20
 if (-not (Get-Process | Where-Object { $_.Path -like "$app*" })) { throw "app died within 20s" }
 "stable 20s"
+# Keep the newest $keepBackups DB backups (this install's included); a DB backup older than a
+# day or two is no realistic rollback, since restoring it loses every thread since.
+# BEGIN backup rotation
+$keepBackups = 2
+Get-ChildItem $ud -File | Where-Object { $_.Name -match '^statev2\.sqlite\.bak-\d{8}-\d{6}$' } |
+  Sort-Object Name -Descending | Select-Object -Skip $keepBackups | ForEach-Object {
+    foreach ($s in '', '-wal', '-shm') { Remove-Item "$($_.FullName)$s" -ErrorAction SilentlyContinue }
+    "db backup pruned: $($_.Name)"
+  }
+# END backup rotation
 Stop-Transcript | Out-Null

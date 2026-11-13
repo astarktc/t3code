@@ -80,8 +80,11 @@ pre-commit (only `git commit` does), so `update.sh` is unaffected.
    `[data-app-modal]`.
 4. **Deploy** with `fork-infra/deploy.sh`: `--remote <host>` for other machines, `--local`
    (`--detach` from inside a T3-hosted thread) for the session host, in any order.
-5. **Record**: asar-hash parity on both Macs; prune superseded
-   `~/.t3/userdata/statev2.sqlite.bak-*` on both, keeping the current schema's.
+5. **Record**: asar-hash parity on both Macs. Rollback sets rotate on their own: `update.sh`
+   keeps the newest 3 `backup/pre-qm*` branches and `windows/install.ps1` the newest 2
+   `statev2.sqlite.bak-*` sets per Windows host, so nothing is pruned by hand. At one or two
+   absorptions a day an older set is no realistic rollback: it drops days of upstream fixes, and
+   restoring an older DB backup loses every thread since.
 6. **Refresh our open upstream PRs** onto the base just absorbed
    (`gh pr list -R pingdotgg/t3code --author astarktc --state open`): rebase a branch that is ours
    alone and `--force-with-lease` it; on a branch a maintainer has taken over, push only a plain
@@ -103,8 +106,11 @@ fork-infra/update.sh --ticket <N> [--base <remote>/<branch>] [--old-base <sha>] 
    (`--no-build` for the tail) keeps pointing at the deployed build; the script stops when the
    two copies disagree. The branch is the only way back to that build: a
    rebuild of the same version overwrites the release zip and the Windows exe under the same
-   names, so a rollback rebuilds from it. Delete the branch, locally and on `origin`, after a
-   quiet week on the new build.
+   names, so a rollback rebuilds from it.
+   **Rotation**: right after, it keeps the newest 3 `backup/pre-qm*` branches by ticket number,
+   here and on `origin`, and deletes the older ones (`--no-push` deletes only local copies). The
+   branch it just made is always kept. A build deployed outside an absorption (a patch added on
+   the same base) gets no branch of its own; roll it back by reverting the patch.
 2. **Rebase**: `git rebase --autosquash --onto <new base> <old base> patched`, replaying exactly
    our commits. The old base defaults to the merge-base with `upstream/main`, which cannot go
    stale because `main` is never rewritten. `--base` stacks on a long-lived upstream feature

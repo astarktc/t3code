@@ -47,7 +47,8 @@ it speeds up server startup.
 3. `wps.sh <host> < install.ps1` — quits the app, backs up `statev2.sqlite`, installs
    silently, refuses an `app-update.yml`, re-points the logon task and the firewall rule at
    the installed exe, relaunches via the task, waits for readiness and checks the app
-   survives 20 s. Output arrives only at the end. A run that hangs leaves
+   survives 20 s. Then it keeps the newest 2 `statev2.sqlite.bak-<yyyyMMdd-HHmmss>` sets
+   (with `-wal`/`-shm`) and deletes older ones; other backups are left alone. Output arrives only at the end. A run that hangs leaves
    `%TEMP%\t3-install-<timestamp>.log` on the host showing how far it got; no log at all
    means the script never started (a `powershell` at ~0 CPU blocked reading stdin, which
    `wps.sh`'s single-line `ReadLine()` transport exists to prevent) — kill the stuck

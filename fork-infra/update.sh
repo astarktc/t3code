@@ -14,6 +14,8 @@
 #                     head before the rebase and pushed to origin. Required
 #                     unless --no-backup. A branch of that name that already
 #                     exists is kept where it is (a re-run in one absorption).
+#                     Only the newest 3 backup/pre-qm* branches (by number) are
+#                     kept; older ones are deleted here and on origin.
 #   --no-backup       create no rollback branch (a dry run, or a re-run whose
 #                     branch exists under another ticket)
 #   --base <ref>      upstream branch to stack on (default upstream/main). Use it
@@ -40,6 +42,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 BRANCH=patched
 BASE_REF=upstream/main
+ROLLBACK_KEEP=3
 
 DO_BUILD=1 DO_INSTALL=0 DO_PUSH=1 DO_BACKUP=1 OLD_BASE_ARG="" TICKET=""
 while [[ $# -gt 0 ]]; do
@@ -105,6 +108,31 @@ if [[ -n "$BACKUP_BRANCH" ]]; then
   if [[ $DO_PUSH -eq 1 && -z "$REMOTE_BACKUP" ]]; then
     git push origin "$BACKUP_BRANCH"
   fi
+
+  # 1c. Rotate: keep the newest ROLLBACK_KEEP rollback branches by ticket number,
+  #     here and on origin. At one or two absorptions a day an older build is no
+  #     realistic rollback, and this run's branch (the deployed build) is always kept.
+  ORIGIN_BACKUPS=$(git ls-remote --heads origin 'refs/heads/backup/pre-qm*' | sed 's|.*refs/heads/||')
+  LOCAL_BACKUPS=$(git for-each-ref --format='%(refname:short)' 'refs/heads/backup/pre-qm*')
+  ALL_BACKUPS=$(printf '%s\n%s\n' "$ORIGIN_BACKUPS" "$LOCAL_BACKUPS" \
+    | grep -E '^backup/pre-qm[0-9]+$' | sort -u | sort -t m -k2 -n -r || true)
+  KEPT=$(printf '%s\n' "$ALL_BACKUPS" | head -n "$ROLLBACK_KEEP")
+  for old in $(printf '%s\n' "$ALL_BACKUPS" | tail -n "+$((ROLLBACK_KEEP + 1))"); do
+    if [[ "$old" == "$BACKUP_BRANCH" ]]; then continue; fi
+    WHERE=""
+    if printf '%s\n' "$LOCAL_BACKUPS" | grep -qx "$old"; then
+      git branch -D "$old" >/dev/null
+      WHERE="here"
+    fi
+    if [[ $DO_PUSH -eq 1 ]] && printf '%s\n' "$ORIGIN_BACKUPS" | grep -qx "$old"; then
+      git push -q origin --delete "$old"
+      WHERE="${WHERE:+$WHERE + }origin"
+    fi
+    if [[ -n "$WHERE" ]]; then
+      echo "== rollback branch $old pruned ($WHERE; keeping the newest $ROLLBACK_KEEP)"
+    fi
+  done
+  echo "== rollback branches kept: $(printf '%s ' $KEPT)"
 fi
 
 git fetch "$REMOTE" "$REMOTE_BRANCH"
@@ -241,5 +269,5 @@ fi
 
 echo "== done. Threads, pairing and settings live in ~/.t3 and carry over."
 if [[ -n "$BACKUP_BRANCH" ]]; then
-  echo "== rollback: $BACKUP_BRANCH (local$([[ $DO_PUSH -eq 1 ]] && echo ' + origin')). Delete it after a quiet week on the new build."
+  echo "== rollback: $BACKUP_BRANCH (local$([[ $DO_PUSH -eq 1 ]] && echo ' + origin')). update.sh keeps the newest $ROLLBACK_KEEP rollback branches."
 fi
