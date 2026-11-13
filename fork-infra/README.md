@@ -23,7 +23,8 @@ patched (this repo)       ← product patches, then ONE fork-infra commit
   stays for as long as it serves us, whatever upstream decides. Every patch has a drop row in the
   Quartermaster watch ledger (trigger: upstream ships equivalent behaviour). Each patch also lives
   alone on its own reference branch (`main` + the patch; today `usage-model-family`,
-  `auth-sliding-expiry`, `sidebar-collapse-pinned-patch`, `sidebar-collapse-drafts`, and
+  `auth-sliding-expiry`, `sidebar-collapse-pinned-patch`, `sidebar-collapse-drafts`,
+  `claude-settings-provider-probe` (worktree `~/Projects/forks/t3code-pr2`), and
   `peer-link-sliding-expiry`, which stacks on the sliding pairing-session commit it builds on), so
   it can be offered upstream as a clean diff.
 - **Remotes:** `upstream` = pingdotgg/t3code, `origin` = astarktc/t3code (public fork, backup of
@@ -235,6 +236,19 @@ Per-patch invariants to grep on every new base:
   `draftThreadsByThreadKey` sessions, so they never reach this block. When upstream renders
   draft sessions anywhere other than `SidebarDraftBlock` (a folder view, mobile), that site
   needs the header too. Drop it if upstream ships collapsible drafts.
+- **Claude `--settings` in the provider probe** (upstream-bound fix, issue #36279; branch
+  `claude-settings-provider-probe`; server-only): a gateway profile passed only as the Claude
+  instance's `--settings` launch arg (`env.ANTHROPIC_BASE_URL`, `apiKeyHelper`, `modelPicker`)
+  reaches the status check and the model picker, not only turns. Grep: `readClaudeLaunchArgSettings`
+  exported from `provider/Drivers/ClaudeSkills.ts` (one copy; the adapter imports it);
+  `readClaudeSettingsEnv` layering the `--settings` env after the non-managed files and before
+  `claudeManagedSettingsPath`; `claudeProbeLaunchArgSettings` in `provider/ClaudeProvider.ts`
+  forwarding only validated `env`, `apiKeyHelper`, `modelPicker`, spread before
+  `disableAllHooks: true` in `buildClaudeCapabilitiesProbeQueryOptions`. When #30127 merges it
+  moves the same reader (the move should replay cleanly) and forwards `enabledPlugins` to the
+  probe; both keys must then reach the probe's `settings`. If upstream adds another reader of
+  Claude settings env, or a second probe, it needs the layer too. Drop it when upstream ships
+  equivalent behaviour.
 - **Short-lived Pi spawns stay offline** (upstream code since #30187, which was our patch; no
   longer carried). `rg -n 'buildPiRpcLaunch\(\{' -g '!*.test.ts' packages apps` lists every Pi
   spawn site (four today). Any new one that T3 stops once it has answered must pass
