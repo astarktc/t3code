@@ -34,7 +34,7 @@ import {
   hasClaudeManagedMcpConfig,
   makeClaudeEnvironment,
 } from "../provider/Drivers/ClaudeHome.ts";
-import { readClaudeLaunchArgSettings } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
+import { readClaudeLaunchArgSettings } from "../provider/Drivers/ClaudeSkills.ts";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 
