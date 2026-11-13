@@ -4170,9 +4170,16 @@ it.layer(
         type: "customEndpoint",
         label: "Custom API endpoint",
       },
+      {
+        settings: { env: { ANTHROPIC_BASE_URL: "https://api.anthropic.com" } },
+        launchArgSettings: { env: { ANTHROPIC_BASE_URL: "https://gateway.example" } },
+        baseUrl: "https://api.anthropic.com",
+        type: "customEndpoint",
+        label: "Custom API endpoint",
+      },
     ])(
       "uses the settings endpoint before the process endpoint: $type / $baseUrl",
-      ({ settings, baseUrl, type, label }) =>
+      ({ settings, launchArgSettings, baseUrl, type, label }) =>
         Effect.gen(function* () {
           const fileSystem = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
@@ -4189,8 +4196,19 @@ it.layer(
             path.join(stateDir, ".claude", "settings.json"),
             JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://state-dir.example" } }),
           );
+          const launchArgSettingsPath = path.join(configDir, "launch-settings.json");
+          if (launchArgSettings) {
+            yield* fileSystem.writeFileString(
+              launchArgSettingsPath,
+              JSON.stringify(launchArgSettings),
+            );
+          }
           const status = yield* checkClaudeProviderStatus(
-            { ...defaultClaudeSettings, homePath: configDir },
+            {
+              ...defaultClaudeSettings,
+              homePath: configDir,
+              ...(launchArgSettings ? { launchArgs: `--settings ${launchArgSettingsPath}` } : {}),
+            },
             claudeCapabilities({
               tokenSource: "ANTHROPIC_AUTH_TOKEN",
               apiKeySource: "none",

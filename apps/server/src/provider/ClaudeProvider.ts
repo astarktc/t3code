@@ -27,6 +27,7 @@ import {
   type SDKControlGetUsageResponse,
   type SDKUserMessage,
   type SettingSource,
+  type Settings as ClaudeSdkSettings,
 } from "@anthropic-ai/claude-agent-sdk";
 
 import {
@@ -49,6 +50,7 @@ import {
 import {
   customClaudeApiEndpointHost,
   discoverClaudeSkills,
+  readClaudeLaunchArgSettings,
   readClaudeSettingsEnv,
 } from "./Drivers/ClaudeSkills.ts";
 import type { ProviderWorkspaceSnapshot } from "@t3tools/provider-core/server/driver";
@@ -233,6 +235,7 @@ export function buildClaudeCapabilitiesProbeQueryOptions(input: {
   readonly environment: NodeJS.ProcessEnv;
   readonly cwd: string | undefined;
   readonly managedMcpConfig: boolean;
+  readonly launchArgSettings?: ClaudeSdkSettings;
 }): ClaudeQueryOptions {
   return {
     persistSession: false,
@@ -240,7 +243,7 @@ export function buildClaudeCapabilitiesProbeQueryOptions(input: {
     abortController: input.abortController,
     settingSources: [...CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES],
     // Keep settings for slash-command discovery, but disable hooks so health checks do not run SessionStart repeatedly.
-    settings: { disableAllHooks: true },
+    settings: { ...input.launchArgSettings, disableAllHooks: true },
     allowedTools: [],
     // Exclude filesystem MCP servers; omit strict mode when managed-mcp.json already excludes them and forbids the flag.
     mcpServers: {},
@@ -416,6 +419,42 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   });
 }
 
+const decodeProbeEnv = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.String));
+const decodeProbeApiKeyHelper = Schema.decodeUnknownOption(Schema.String);
+const decodeProbeModelPicker = Schema.decodeUnknownOption(
+  Schema.Struct({
+    options: Schema.mutable(
+      Schema.Array(
+        Schema.Struct({
+          model: Schema.String,
+          label: Schema.optionalKey(Schema.String),
+          description: Schema.optionalKey(Schema.String),
+          behavesAs: Schema.optionalKey(Schema.String),
+        }),
+      ),
+    ),
+    replaceBuiltInOptions: Schema.optionalKey(Schema.Boolean),
+  }),
+);
+
+/**
+ * The --settings keys that decide the account and models the probe reports. Claude Code drops
+ * the whole inline settings layer when any key in it is invalid, disableAllHooks included, so
+ * each key is forwarded only when well formed and nothing else is forwarded.
+ */
+function claudeProbeLaunchArgSettings(
+  settings: Readonly<Record<string, unknown>> | undefined,
+): ClaudeSdkSettings {
+  const env = decodeProbeEnv(settings?.env);
+  const apiKeyHelper = decodeProbeApiKeyHelper(settings?.apiKeyHelper);
+  const modelPicker = decodeProbeModelPicker(settings?.modelPicker);
+  return {
+    ...(Option.isSome(env) ? { env: env.value } : {}),
+    ...(Option.isSome(apiKeyHelper) ? { apiKeyHelper: apiKeyHelper.value } : {}),
+    ...(Option.isSome(modelPicker) ? { modelPicker: modelPicker.value } : {}),
+  };
+}
+
 /**
  * With gateway model discovery on, Claude Code refreshes its model cache in the background after
  * initialization, so the probe subprocess outlives init by Claude Code's discovery timeout.
@@ -457,6 +496,15 @@ const probeClaudeCapabilities = (
       claudeEnvironment,
     );
     const managedMcpConfig = yield* hasClaudeManagedMcpConfig();
+    // An unreadable --settings value fails the turn, not the provider status.
+    const launchArgSettings = claudeProbeLaunchArgSettings(
+      yield* readClaudeLaunchArgSettings({
+        settings: claudeSettings,
+        cwd: cwd ?? null,
+        fileSystem: yield* FileSystem.FileSystem,
+        path: yield* Path.Path,
+      }).pipe(Effect.orElseSucceed(() => undefined)),
+    );
     // Workspace probes (no usage) discard models; the machine probe refreshes the shared cache.
     const graceMs = includeStatus
       ? claudeGatewayDiscoveryGraceMs({
@@ -477,6 +525,7 @@ const probeClaudeCapabilities = (
             environment: claudeEnvironment,
             cwd,
             managedMcpConfig,
+            launchArgSettings,
           }),
         });
         const init = await q.initializationResult();

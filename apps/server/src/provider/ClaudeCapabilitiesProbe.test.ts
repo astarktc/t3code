@@ -35,6 +35,69 @@ it("drops strict MCP mode, and only that, next to an administrator's managed-mcp
   assert.equal(options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
 });
 
+const gatewayModelPicker = {
+  replaceBuiltInOptions: true,
+  options: [{ model: "gateway-opus", label: "Gateway Opus", description: "Via the gateway" }],
+};
+
+it.effect.each([
+  {
+    name: "a gateway profile",
+    file: {
+      apiKeyHelper: "gateway-cli token",
+      env: { ANTHROPIC_BASE_URL: "https://gateway.example", ANTHROPIC_AUTH_TOKEN: "" },
+      modelPicker: gatewayModelPicker,
+      disableAllHooks: false,
+      hooks: { SessionStart: [] },
+      permissions: { defaultMode: "acceptEdits" },
+    },
+    settings: {
+      apiKeyHelper: "gateway-cli token",
+      env: { ANTHROPIC_BASE_URL: "https://gateway.example", ANTHROPIC_AUTH_TOKEN: "" },
+      modelPicker: gatewayModelPicker,
+      disableAllHooks: true,
+    },
+  },
+  {
+    name: "malformed keys",
+    file: {
+      apiKeyHelper: ["gateway-cli", "token"],
+      env: { ANTHROPIC_BASE_URL: "https://gateway.example", CLAUDE_CODE_MAX_CONTEXT_TOKENS: 1 },
+      modelPicker: { options: [{ label: "No model" }] },
+    },
+    settings: { disableAllHooks: true },
+  },
+])("hands the probe the account and model keys of --settings: $name", ({ file, settings }) =>
+  Effect.gen(function* () {
+    let probeSettings: unknown;
+    const query = vi.spyOn(ClaudeSdk, "query").mockImplementation(({ options }) => {
+      probeSettings = options?.settings;
+      return {
+        initializationResult: async () => ({
+          account: { email: "dev@example.com" },
+          commands: [{ name: "review", description: "Review changes", argumentHint: "" }],
+          models: [{ value: "gateway-opus", displayName: "Gateway Opus", description: "" }],
+        }),
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () =>
+          new Promise((_, reject) => reject(new Error("usage unavailable"))),
+      } as ReturnType<typeof ClaudeSdk.query>;
+    });
+    yield* Effect.addFinalizer(() => Effect.sync(() => query.mockRestore()));
+    const fileSystem = yield* FileSystem.FileSystem;
+    const configDir = yield* fileSystem.makeTempDirectoryScoped();
+    const settingsPath = `${configDir}/gateway-settings.json`;
+    yield* fileSystem.writeFileString(settingsPath, JSON.stringify(file));
+    yield* probeClaudeCapabilities(
+      yield* decodeClaudeSettings({
+        binaryPath: "claude",
+        launchArgs: `--settings ${settingsPath}`,
+      }),
+      { PATH: (yield* HostProcess.Environment).PATH, CLAUDE_CONFIG_DIR: configDir },
+    );
+    assert.deepEqual(probeSettings, settings);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("reports a deleted worktree's scan as finished, not pending", () =>
   Effect.gen(function* () {
     const snapshot = yield* probeClaudeWorkspaceSnapshot(
