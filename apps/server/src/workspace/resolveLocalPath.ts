@@ -106,3 +106,10 @@ export async function resolveLocalPath(
  * compare that spelling.
  */
 const canonicalSpelling = (linkFreePath: string) => NodeFSP.realpath(linkFreePath);
+
+/**
+ * A root to pass as `from`/`workspaceRoot`, in the same spelling `resolveLocalPath` returns. Effect's
+ * `FileSystem.realPath` keeps the requested case on a case-insensitive volume, so comparing its
+ * result with this module's would put an inside-root path outside.
+ */
+export const resolveRealRoot = (root: string): Promise<string> => NodeFSP.realpath(root);
