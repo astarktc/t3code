@@ -416,6 +416,10 @@ Follow an agent's file link to read a report or other file outside the workspace
 These files open read-only. An HTML file outside the workspace cannot load scripts,
 styles, or images from neighboring files.
 
+A symbolic link in the project to a folder or file elsewhere on the machine shows in
+Files, and text files through it open there. Changes to them cannot be saved, and
+search does not include them.
+
 ## HTML and PDF files in the file viewer
 
 On web and desktop, HTML and PDF files open as rendered pages. Switch an HTML

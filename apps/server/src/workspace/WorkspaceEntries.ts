@@ -29,6 +29,7 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
+import { resolveLocalPath } from "./resolveLocalPath.ts";
 
 export class WorkspaceEntriesWindowsPathUnsupportedError extends Schema.TaggedError<WorkspaceEntriesWindowsPathUnsupportedError>()(
   "WorkspaceEntriesWindowsPathUnsupportedError",
@@ -389,21 +390,9 @@ export const make = Effect.gen(function* () {
                   relativePath: directoryPath,
                 })
                 .pipe(Effect.mapError(toError));
-        const { entries, throughSymlink, nestedGitRoots } = yield* Effect.tryPromise({
+        const { entries, throughSymlink, nestedGitRoots, outsideRoot } = yield* Effect.tryPromise({
           try: async () => {
             const root = await NodeFSP.realpath(normalizedCwd);
-            const directory = await NodeFSP.realpath(target.absolutePath);
-            const relative = path.relative(root, directory);
-            if (
-              relative === ".." ||
-              relative.startsWith(`..${path.sep}`) ||
-              path.isAbsolute(relative) ||
-              relative.split(path.sep).includes(".git") ||
-              target.relativePath.split("/").includes(".git")
-            ) {
-              throw new Error("Directory must be inside the workspace and outside .git.");
-            }
-            const children = await NodeFSP.readdir(directory, { withFileTypes: true });
             const isSameOrInside = (parent: string, child: string) => {
               const relativeChild = path.relative(parent, child);
               return (
@@ -412,6 +401,26 @@ export const make = Effect.gen(function* () {
                 !path.isAbsolute(relativeChild)
               );
             };
+            const isInGitFolder = (realPath: string) =>
+              (isSameOrInside(root, realPath) ? path.relative(root, realPath) : realPath)
+                .split(path.sep)
+                .includes(".git");
+            // Links may lead outside the workspace; listing there is read-only, like host paths.
+            const resolvedDirectory = await resolveLocalPath(path, {
+              from: root,
+              segments: target.relativePath.split("/"),
+              workspaceRoot: root,
+            });
+            if (
+              resolvedDirectory._tag === "Network" ||
+              isInGitFolder(resolvedDirectory.realPath) ||
+              target.relativePath.split("/").includes(".git")
+            ) {
+              throw new Error("Directory must be local and outside .git.");
+            }
+            const directory = resolvedDirectory.realPath;
+            const relative = path.relative(root, directory);
+            const children = await NodeFSP.readdir(directory, { withFileTypes: true });
             // Reject canonical ancestors so "Expand all folders" cannot follow a cycle.
             let visitedFolders: Promise<ReadonlyArray<string>> | undefined;
             const loadVisitedFolders = () =>
@@ -427,21 +436,16 @@ export const make = Effect.gen(function* () {
             const resolveSymlinkKind = async (
               name: string,
             ): Promise<ProjectEntry["kind"] | undefined> => {
-              const resolved = await NodeFSP.realpath(path.join(directory, name)).catch(
-                () => undefined,
-              );
-              if (
-                resolved === undefined ||
-                !isSameOrInside(root, resolved) ||
-                path.relative(root, resolved).split(path.sep).includes(".git")
-              ) {
-                return undefined;
-              }
-              const stat = await NodeFSP.stat(resolved).catch(() => undefined);
-              if (stat?.isFile()) return "file";
-              if (!stat?.isDirectory()) return undefined;
+              const resolved = await resolveLocalPath(path, {
+                from: directory,
+                segments: [name],
+                workspaceRoot: root,
+              }).catch(() => undefined);
+              if (resolved?._tag !== "Local" || isInGitFolder(resolved.realPath)) return undefined;
+              if (resolved.stat?.isFile()) return "file";
+              if (!resolved.stat?.isDirectory()) return undefined;
               const folders = await loadVisitedFolders();
-              return folders.some((folder) => isSameOrInside(resolved, folder))
+              return folders.some((folder) => isSameOrInside(resolved.realPath, folder))
                 ? undefined
                 : "directory";
             };
@@ -461,8 +465,9 @@ export const make = Effect.gen(function* () {
                 )),
               );
             }
+            const outsideRoot = !isSameOrInside(root, directory);
             const nestedGitRoots: Array<string> = [];
-            const segments = target.relativePath.split("/").filter(Boolean);
+            const segments = outsideRoot ? [] : target.relativePath.split("/").filter(Boolean);
             for (let index = 1; index <= segments.length; index += 1) {
               const candidate = segments.slice(0, index).join("/");
               const dotGit = await NodeFSP.lstat(path.join(normalizedCwd, candidate, ".git")).catch(
@@ -472,6 +477,7 @@ export const make = Effect.gen(function* () {
             }
             return {
               nestedGitRoots,
+              outsideRoot,
               entries: children.flatMap((child, index): ProjectEntry[] => {
                 const kind = kinds[index];
                 if (kind === undefined) return [];
@@ -488,6 +494,8 @@ export const make = Effect.gen(function* () {
           },
           catch: toError,
         });
+        // The workspace's git does not know these paths, so nothing there is labelled.
+        if (outsideRoot) return { entries, truncated: false };
         let gitRoot = "";
         let gitPrefix = "";
         // stdin avoids argument limits; ignore classification is optional without git/repositories.
