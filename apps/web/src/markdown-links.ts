@@ -2,12 +2,18 @@ import { isLocalEditorFileUrl } from "@t3tools/contracts";
 import { fileBasename, isAbsolutePath, workspaceRelativeFilePath } from "@t3tools/shared/path";
 import {
   inlineCodeFilePathCandidate,
+  inlineCodeSpacedFilePathCandidate,
   isRelativeFilePath,
   normalizeMarkdownLinkDestination,
   parseMarkdownFileLink,
   resolveMarkdownFileLinkTarget,
 } from "@t3tools/shared/markdownLinks";
-import { parseFileUrlHref, splitFilePathPosition } from "@t3tools/shared/fileLinks";
+import {
+  formatFilePathPosition,
+  parseFileUrlHref,
+  resolvePathLinkTarget,
+  splitFilePathPosition,
+} from "@t3tools/shared/fileLinks";
 
 import { formatWorkspaceRelativePath } from "./filePathDisplay";
 import { isTerminalLinkActivation } from "./terminal-links";
@@ -58,6 +64,31 @@ export function resolveInlineCodeFileLinkMeta(
     cwd,
     inlineCodePathNamesFromWorkspaceRoot(candidate, cwd, baseDir) ? cwd : baseDir,
   );
+}
+
+/**
+ * Link it only once the host confirms `filePath` is a file; see inlineCodeSpacedFilePathCandidate.
+ * Inline code holds a literal path, so `#`, `?` and `%` stay part of the name, unlike in a link
+ * destination: `/bin/ls # notes.md` must be checked whole, never as `/bin/ls`.
+ */
+export function resolveSpacedInlineCodeFileLinkMeta(
+  codeText: string,
+  cwd?: string,
+  baseDir: string | undefined = cwd,
+): MarkdownFileLinkMeta | null {
+  const candidate = inlineCodeSpacedFilePathCandidate(codeText);
+  if (candidate === null) return null;
+  if (isRelativeFilePath(candidate) && !baseDir) return null;
+  const position = splitFilePathPosition(candidate);
+  const targetPath = isRelativeFilePath(candidate)
+    ? resolvePathLinkTarget(candidate, baseDir!)
+    : formatFilePathPosition(position);
+  return {
+    ...buildFileLinkMetaFromTarget(targetPath, cwd),
+    // The target keeps only the first line, so a `:12-18` range is carried here.
+    ...(position.endLine !== undefined ? { endLine: position.endLine } : {}),
+    workspaceLookupPath: null,
+  };
 }
 
 function inlineCodePathNamesFromWorkspaceRoot(

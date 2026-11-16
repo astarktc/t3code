@@ -76,10 +76,34 @@ vi.mock(import("../state/session"), async (original) => {
   };
 });
 const deniedEnvironmentId = vi.hoisted(() => "denied-environment");
+const { hostFileMetadata, hostFileMetadataAtoms } = vi.hoisted(() => ({
+  hostFileMetadata: vi.fn<(path: string) => Promise<{ kind: "file" | "directory" } | null>>(),
+  // Like the real family, one atom per target; a fresh atom per read would never settle.
+  hostFileMetadataAtoms: new Map<string, unknown>(),
+}));
 vi.mock(import("../state/filesystem"), async (original) => {
   const actual = await original();
+  const { Atom } = await import("effect/reactivity");
+  const Effect = await import("effect/Effect");
   return {
     ...actual,
+    filesystemEnvironment: {
+      ...actual.filesystemEnvironment,
+      getMetadata: (({ input }: { input: { paths: string[] } }) => {
+        const key = JSON.stringify(input.paths);
+        if (!hostFileMetadataAtoms.has(key)) {
+          hostFileMetadataAtoms.set(
+            key,
+            Atom.make(
+              Effect.promise(async () => ({
+                entries: await Promise.all(input.paths.map((path) => hostFileMetadata(path))),
+              })),
+            ),
+          );
+        }
+        return hostFileMetadataAtoms.get(key);
+      }) as never,
+    },
     useFilesystemReadAccess: ((environmentId: EnvironmentId | null) =>
       environmentId === deniedEnvironmentId
         ? { canReadFiles: false, isPending: false, error: null }
@@ -165,6 +189,8 @@ function setup() {
   renderDiagram.mockReset();
   workspaceSearch.mockReset().mockResolvedValue(AsyncResult.success({ entries: [] }));
   filesystemMetadata.mockReset().mockResolvedValue(AsyncResult.success({ entries: [null] }));
+  hostFileMetadata.mockReset().mockResolvedValue(null);
+  hostFileMetadataAtoms.clear();
 }
 
 function renderText(text: string, props: Partial<Parameters<typeof ChatMarkdown>[0]> = {}) {
@@ -525,6 +551,39 @@ describe("ChatMarkdown workspace file opens", () => {
 
     expect(openFile).toHaveBeenCalledExactlyOnceWith(threadRef, "/elsewhere/b.md", 9);
     expect(workspaceSearch).toHaveBeenCalledOnce();
+  });
+
+  // regression: #37740 an inline-code path with spaces links once its host confirms the file
+  it("links an inline-code path with spaces only once the host confirms it is a file", async () => {
+    setup();
+    const draft = "/Users/me/OneDrive/Finance Use Cases/working/2026-11-16 message - draft.md";
+    const command = "/usr/bin/python3 script.py";
+    let confirmDraft!: (entry: { kind: "file" }) => void;
+    hostFileMetadata.mockImplementation((path) =>
+      path === draft
+        ? new Promise((resolve) => {
+            confirmDraft = resolve;
+          })
+        : Promise.resolve(null),
+    );
+    using openFile = vi
+      .spyOn(useRightPanelStore.getState(), "openFile")
+      .mockImplementation(() => {});
+    await using screen = await renderText(`Wrote \`${draft}\` with \`${command}\`.`, {
+      threadRef,
+    });
+    const codeTexts = () =>
+      [...screen.container.querySelectorAll("p code")].map((code) => code.textContent);
+    await vi.waitFor(() => expect(hostFileMetadata).toHaveBeenCalledWith(command));
+    expect(hostFileMetadata).toHaveBeenCalledWith(draft);
+    expect(codeTexts()).toEqual([draft, command]);
+
+    await act(async () => confirmDraft({ kind: "file" }));
+    const chip = screen.container.querySelector<HTMLAnchorElement>(".chat-markdown-file-link");
+    expect(chip?.getAttribute("href")).toBe(draft);
+    expect(codeTexts()).toEqual([command]);
+    await act(async () => chip!.click());
+    expect(openFile).toHaveBeenCalledExactlyOnceWith(threadRef, draft, undefined);
   });
 });
 

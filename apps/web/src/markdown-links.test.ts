@@ -4,6 +4,7 @@ import {
   isLocalEditorFileHref,
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
+  resolveSpacedInlineCodeFileLinkMeta,
   rewriteMarkdownFileUriHref,
 } from "./markdown-links";
 import {
@@ -112,6 +113,32 @@ describe("resolveInlineCodeFileLinkMeta", () => {
     expect(
       resolveInlineCodeFileLinkMeta("example.uk/index.html", "/Users/julius/project"),
     ).toBeNull();
+  });
+});
+
+describe("resolveSpacedInlineCodeFileLinkMeta", () => {
+  it("checks the literal path, keeping #, ? and % in the name", () => {
+    // The host check confirms filePath, so a shell comment must not shrink it to `/bin/ls`.
+    expect(resolveSpacedInlineCodeFileLinkMeta("/bin/ls # list notes.md", "/repo")).toMatchObject({
+      filePath: "/bin/ls # list notes.md",
+    });
+    for (const name of ["report #1.md", "why? notes.md", "100% done.md"]) {
+      expect(
+        resolveSpacedInlineCodeFileLinkMeta(`/Users/me/My Notes/${name}`, "/repo")?.filePath,
+      ).toBe(`/Users/me/My Notes/${name}`);
+    }
+  });
+
+  it("keeps a line suffix and expands ~/ against the home folder", () => {
+    expect(
+      resolveSpacedInlineCodeFileLinkMeta("/Users/me/My Notes/plan.md:12", "/repo"),
+    ).toMatchObject({ filePath: "/Users/me/My Notes/plan.md", line: 12 });
+    expect(
+      resolveSpacedInlineCodeFileLinkMeta("/Users/me/My Notes/plan.md:12-18", "/repo"),
+    ).toMatchObject({ filePath: "/Users/me/My Notes/plan.md", line: 12, endLine: 18 });
+    expect(
+      resolveSpacedInlineCodeFileLinkMeta("~/My Notes/plan.md", "/Users/me/repo")?.filePath,
+    ).toBe("/Users/me/My Notes/plan.md");
   });
 });
 

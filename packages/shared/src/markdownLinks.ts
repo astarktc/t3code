@@ -31,6 +31,10 @@ const POSITION_SUFFIX_PATTERN = /:\d+(?::\d+|-\d+)?$/;
 const POSITION_ONLY_PATTERN = /^\d+(?::\d+|-\d+)?$/;
 
 const INLINE_CODE_DISQUALIFIER_PATTERN = /[\s`]/;
+// Whitespace other than a space, a backtick, or shell syntax: operators, redirects, variables,
+// globs, and a ` -x` flag (a ` - ` separator in a file name is not one).
+const SPACED_INLINE_CODE_DISQUALIFIER_PATTERN = /[^\S ]|[`|;<>$*]|&&|\s--?[^\s-]/;
+const SPACED_INLINE_CODE_ROOT_PATTERN = /^(?:\/(?!\/)|~\/|[A-Za-z]:[\\/])/;
 
 const PATH_SEPARATOR_PATTERN = /[\\/]/;
 // Agents shorten long paths with a `...` or `…` segment, which no file chip can open.
@@ -214,6 +218,28 @@ export function inlineCodeFilePathCandidate(codeText: string): string | null {
     }
   }
   return candidate;
+}
+
+/**
+ * An inline-code absolute or `~/` path with spaces, such as `/Users/me/My Notes/plan.md`. A command
+ * can share that shape (`/bin/echo hello.txt`), so a client links one only once its host confirms
+ * the path is a file.
+ */
+export function inlineCodeSpacedFilePathCandidate(codeText: string): string | null {
+  const candidate = codeText.trim();
+  if (
+    !candidate.includes(" ") ||
+    !SPACED_INLINE_CODE_ROOT_PATTERN.test(candidate) ||
+    SPACED_INLINE_CODE_DISQUALIFIER_PATTERN.test(candidate)
+  ) {
+    return null;
+  }
+  const path = candidate.replace(POSITION_SUFFIX_PATTERN, "");
+  if (ELIDED_PATH_SEGMENT_PATTERN.test(path)) return null;
+  const basename = path.split(PATH_SEPARATOR_PATTERN).at(-1) ?? "";
+  return FILE_EXTENSION_PATTERN.test(basename) || EXTENSIONLESS_FILE_NAMES.has(basename)
+    ? candidate
+    : null;
 }
 
 export function safeDecodeURIComponent(value: string): string {

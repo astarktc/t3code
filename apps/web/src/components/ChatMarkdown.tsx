@@ -143,6 +143,7 @@ import {
   isLocalEditorFileHref,
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
+  resolveSpacedInlineCodeFileLinkMeta,
   rewriteMarkdownFileUriHref,
   type MarkdownFileLinkMeta,
 } from "../markdown-links";
@@ -477,18 +478,52 @@ function fileLinkSourcesKey(
     .map(decodeMarkdownLinkEscapes)
     .map(normalizeMarkdownLinkHrefKey)
     .filter((href) => resolveMarkdownFileLinkMeta(href, cwd, imageBaseDir ?? cwd));
-  const spans = extractInlineCodeSpans(text).filter((span) =>
-    resolveInlineCodeFileLinkMeta(span, cwd, imageBaseDir ?? cwd),
+  const spans = extractInlineCodeSpans(text).filter(
+    (span) =>
+      resolveInlineCodeFileLinkMeta(span, cwd, imageBaseDir ?? cwd) ??
+      resolveSpacedInlineCodeFileLinkMeta(span, cwd, imageBaseDir ?? cwd),
   );
   return JSON.stringify([[...new Set(hrefs)], [...new Set(spans)]]);
 }
 
+function spacedInlineCodeFilePaths(
+  key: string,
+  cwd: string | undefined,
+  imageBaseDir: string | undefined,
+): string[] {
+  const [, spans] = JSON.parse(key) as [string[], string[]];
+  const paths = spans.flatMap(
+    (span) => resolveSpacedInlineCodeFileLinkMeta(span, cwd, imageBaseDir ?? cwd)?.filePath ?? [],
+  );
+  return [...new Set(paths)];
+}
+
+// Inline code with spaces may be a command, so it links only once its host confirms a file. One
+// query per path keeps the chips already confirmed while a streaming reply adds another path.
+const confirmedHostFilesAtom = Atom.family((key: string) => {
+  const [environmentId, ...paths] = JSON.parse(key) as [EnvironmentId, ...string[]];
+  return Atom.make((get) =>
+    JSON.stringify(
+      paths.filter(
+        (path) =>
+          AsyncResult.getOrElse(
+            get(filesystemEnvironment.getMetadata({ environmentId, input: { paths: [path] } })),
+            () => null,
+          )?.entries[0]?.kind === "file",
+      ),
+    ),
+  ).pipe(Atom.withLabel("markdown-confirmed-host-files"));
+});
+const NO_CONFIRMED_HOST_FILES_ATOM = Atom.make("[]");
+
 function resolveFileLinkSources(
   key: string,
+  confirmedHostFilesKey: string,
   cwd: string | undefined,
   imageBaseDir: string | undefined,
 ) {
   const [hrefs, spans] = JSON.parse(key) as [string[], string[]];
+  const confirmedHostFiles = new Set(JSON.parse(confirmedHostFilesKey) as string[]);
   const markdownFileLinkMetaByHref = new Map<string, MarkdownFileLinkMeta>();
   for (const href of hrefs) {
     const meta = resolveMarkdownFileLinkMeta(href, cwd, imageBaseDir ?? cwd);
@@ -496,7 +531,10 @@ function resolveFileLinkSources(
   }
   const inlineCodeFileLinkMetaByText = new Map<string, MarkdownFileLinkMeta>();
   for (const span of spans) {
-    const meta = resolveInlineCodeFileLinkMeta(span, cwd, imageBaseDir ?? cwd);
+    const spacedMeta = resolveSpacedInlineCodeFileLinkMeta(span, cwd, imageBaseDir ?? cwd);
+    const meta =
+      resolveInlineCodeFileLinkMeta(span, cwd, imageBaseDir ?? cwd) ??
+      (spacedMeta && confirmedHostFiles.has(spacedMeta.filePath) ? spacedMeta : null);
     if (meta) inlineCodeFileLinkMetaByText.set(span, meta);
   }
   const fileLinkParentSuffixByPath = buildFileLinkParentSuffixByPath([
@@ -579,6 +617,7 @@ function useChatMarkdownState({
   const environmentId = threadRef?.environmentId ?? explicitEnvironmentId ?? null;
   const canOperateHost = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperatePreview = useEnvironmentScope(environmentId, AuthPreviewOperateScope);
+  const canReadFiles = useEnvironmentScope(environmentId, AuthFilesystemReadScope);
   const isClientHost = useAtomValue(clientHostEnvironmentAtom(environmentId));
   const remoteOpen = useRemoteOpenResolution(environmentId);
   const canUseShellActions =
@@ -705,8 +744,14 @@ function useChatMarkdownState({
   // renderer context, and every block reading it, unchanged.
   // A template literal marks the key as a string, so the compiler memoizes the maps on its value.
   const fileLinksKey = `${fileLinkSourcesKey(text, cwd, imageBaseDir)}`;
+  const spacedFilePaths = spacedInlineCodeFilePaths(fileLinksKey, cwd, imageBaseDir);
+  const confirmedHostFilesKey = useAtomValue(
+    environmentId === null || !canReadFiles || spacedFilePaths.length === 0
+      ? NO_CONFIRMED_HOST_FILES_ATOM
+      : confirmedHostFilesAtom(JSON.stringify([environmentId, ...spacedFilePaths])),
+  );
   const { markdownFileLinkMetaByHref, inlineCodeFileLinkMetaByText, fileLinkParentSuffixByPath } =
-    resolveFileLinkSources(fileLinksKey, cwd, imageBaseDir);
+    resolveFileLinkSources(fileLinksKey, confirmedHostFilesKey, cwd, imageBaseDir);
   const resolveThreadPullRequest = (
     href: string,
   ): (ThreadPullRequestKey & { readonly url: string }) | null => {

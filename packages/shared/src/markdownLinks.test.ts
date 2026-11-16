@@ -5,6 +5,7 @@ import { extractMarkdownLinkHrefs, resolveMarkdownFileLinkTarget } from "./markd
 
 import {
   inlineCodeFilePathCandidate,
+  inlineCodeSpacedFilePathCandidate,
   isMarkdownFileLinkLabel,
   parseMarkdownFileLink,
 } from "./markdownLinks.ts";
@@ -48,8 +49,44 @@ describe("inlineCodeFilePathCandidate", () => {
     ["./bin/run:12", "./bin/run:12"],
     ["src/資料.備份:12", "src/資料.備份:12"],
     ["src/foo.c++:12", "src/foo.c++:12"],
+    // Spaces need the host to confirm a file: inlineCodeSpacedFilePathCandidate.
+    ["/Users/me/My Notes/plan.md", null],
   ])("distinguishes file paths from code and hostnames in %s", (source, candidate) => {
     expect(inlineCodeFilePathCandidate(source)).toBe(candidate);
+  });
+});
+
+describe("inlineCodeSpacedFilePathCandidate", () => {
+  // regression: #37740 a file path with spaces in inline code becomes a file chip candidate
+  it.each([
+    [
+      " /Users/me/Library/CloudStorage/OneDrive-Org/Finance Use Cases/working/2026-11-16 message - draft.md ",
+      "/Users/me/Library/CloudStorage/OneDrive-Org/Finance Use Cases/working/2026-11-16 message - draft.md",
+    ],
+    ["~/My Notes/plan.md:12", "~/My Notes/plan.md:12"],
+    ["C:\\Program Files\\App\\config.json", "C:\\Program Files\\App\\config.json"],
+    ["/srv/My Project/Makefile", "/srv/My Project/Makefile"],
+    // A command whose last word is file-shaped still passes; only the host can rule it out.
+    ["/usr/bin/python3 script.py", "/usr/bin/python3 script.py"],
+    ["/Users/me/plan.md", null],
+    ["src/My Notes/plan.md", null],
+    ["//host/My Share/plan.md", null],
+    ["/Users/me/My Notes/", null],
+    ["/Users/me/My Notes", null],
+    ["/Users/me/My Notes/.../plan.md", null],
+    ["/Users/me/My\tNotes/plan.md", null],
+    ["/bin/ls -la /tmp/notes.md", null],
+    ["/usr/bin/git --no-pager log.md", null],
+    ["/bin/cat a.md && /bin/cat b.md", null],
+    ["/bin/cat a.md || true.md", null],
+    ["/bin/cat a.md | wc.md", null],
+    ["/bin/cat a.md; b.md", null],
+    ["/bin/echo hi > out.md", null],
+    ["/bin/sort < in.md", null],
+    ["/bin/echo $HOME/notes.md", null],
+    ["/bin/rm /tmp/*.md", null],
+  ])("reads %s as a path with spaces or not", (source, candidate) => {
+    expect(inlineCodeSpacedFilePathCandidate(source)).toBe(candidate);
   });
 });
 
