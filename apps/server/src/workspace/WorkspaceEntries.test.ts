@@ -158,28 +158,50 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         const platform = yield* HostProcess.Platform;
         if (platform === "win32") return;
         const cwd = yield* makeTempDir({ git: true });
-        const outside = yield* makeTempDir();
+        const outside = yield* makeTempDir({ git: true });
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         yield* writeTextFile(cwd, "real.txt");
         yield* writeTextFile(cwd, "realdir/nested.txt");
+        yield* writeTextFile(outside, ".gitignore", "*.txt\n");
         yield* writeTextFile(outside, "outside.txt");
+        yield* writeTextFile(outside, "Cognizant/notes.md");
         yield* fileSystem.symlink("real.txt", path.join(cwd, "link.txt"));
         yield* fileSystem.symlink("realdir", path.join(cwd, "linkdir"));
         yield* fileSystem.symlink(outside, path.join(cwd, "outside-link"));
+        yield* fileSystem.symlink(path.join(outside, "outside.txt"), path.join(cwd, "outside.md"));
         yield* fileSystem.symlink(".git", path.join(cwd, "git-link"));
+        // On a case-insensitive volume `.GIT` is `.git`; elsewhere the link dangles.
+        yield* fileSystem.symlink(".GIT", path.join(cwd, "git-link-upper"));
+        yield* fileSystem.symlink(path.join(outside, ".git"), path.join(cwd, "outside-git"));
         yield* fileSystem.symlink("missing", path.join(cwd, "dangling"));
+        yield* fileSystem.symlink(path.join(outside, "missing"), path.join(cwd, "dangling-out"));
 
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
         const root = yield* workspaceEntries.list({ cwd, directoryPath: "" });
         expect(root.entries.toSorted((a, b) => a.path.localeCompare(b.path))).toEqual([
           { path: "link.txt", kind: "file" },
           { path: "linkdir", kind: "directory" },
+          { path: "outside-link", kind: "directory" },
+          { path: "outside.md", kind: "file" },
           { path: "real.txt", kind: "file" },
           { path: "realdir", kind: "directory" },
         ]);
         expect(yield* workspaceEntries.list({ cwd, directoryPath: "linkdir" })).toEqual({
           entries: [{ path: "linkdir/nested.txt", kind: "file" }],
+          truncated: false,
+        });
+        // Git runs only for the workspace, so a linked repository's ignore rules label nothing.
+        const outsideEntries = yield* workspaceEntries.list({ cwd, directoryPath: "outside-link" });
+        expect(outsideEntries.entries.toSorted((a, b) => a.path.localeCompare(b.path))).toEqual([
+          { path: "outside-link/.gitignore", kind: "file" },
+          { path: "outside-link/Cognizant", kind: "directory" },
+          { path: "outside-link/outside.txt", kind: "file" },
+        ]);
+        expect(
+          yield* workspaceEntries.list({ cwd, directoryPath: "outside-link/Cognizant" }),
+        ).toEqual({
+          entries: [{ path: "outside-link/Cognizant/notes.md", kind: "file" }],
           truncated: false,
         });
       }),
@@ -200,13 +222,24 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         yield* fileSystem.symlink("..", path.join(cwd, "a/up"));
         yield* fileSystem.symlink("../b", path.join(cwd, "a/to-b"));
         yield* fileSystem.symlink("../a", path.join(cwd, "b/to-a"));
+        const outside = yield* makeTempDir();
+        yield* writeTextFile(outside, "file.txt");
+        yield* fileSystem.symlink(outside, path.join(cwd, "out"));
+        yield* fileSystem.symlink(cwd, path.join(outside, "to-project"));
+        yield* fileSystem.symlink(".", path.join(outside, "to-self"));
+        // On a case-insensitive volume this leads back to MixedCase; elsewhere it dangles.
+        yield* writeTextFile(cwd, "MixedCase/file.txt");
+        yield* fileSystem.symlink(path.join(cwd, "mixedcase"), path.join(cwd, "MixedCase/self"));
 
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
         const paths = (directoryPath: string) =>
           workspaceEntries
             .list({ cwd, directoryPath })
             .pipe(Effect.map(({ entries }) => entries.map((entry) => entry.path).toSorted()));
-        expect(yield* paths("")).toEqual(["a", "b"]);
+        expect(yield* paths("")).toEqual(["MixedCase", "a", "b", "out"]);
+        expect(yield* paths("MixedCase")).toEqual(["MixedCase/file.txt"]);
+        // Loops that return through a folder outside the workspace are hidden too.
+        expect(yield* paths("out")).toEqual(["out/file.txt"]);
         // A link into a sibling folder is fine on its own...
         expect(yield* paths("a")).toEqual(["a/file.txt", "a/to-b"]);
         // ...but once followed, the sibling's link back is hidden.
@@ -235,17 +268,17 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
             }),
           { concurrency: 32, discard: true },
         );
-        const realpath = NodeFSP.realpath;
+        const readlink = NodeFSP.readlink;
         let inFlight = 0;
         let maxInFlight = 0;
-        vi.spyOn(NodeFSP, "realpath").mockImplementation((async (target: string) => {
+        vi.spyOn(NodeFSP, "readlink").mockImplementation((async (target: string) => {
           maxInFlight = Math.max(maxInFlight, ++inFlight);
           try {
-            return await realpath(target);
+            return await readlink(target);
           } finally {
             inFlight--;
           }
-        }) as typeof NodeFSP.realpath);
+        }) as typeof NodeFSP.readlink);
 
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
         const { entries } = yield* workspaceEntries.list({ cwd, directoryPath });
@@ -350,29 +383,69 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       }),
     );
 
-    it.effect(
-      "rejects directory traversal, git internals, and symlinks outside the workspace",
-      () =>
-        Effect.gen(function* () {
-          const cwd = yield* makeTempDir();
-          const outside = yield* makeTempDir();
-          const fileSystem = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          yield* writeTextFile(cwd, ".git/HEAD");
-          const platform = yield* HostProcess.Platform;
-          if (platform !== "win32") yield* fileSystem.symlink(outside, path.join(cwd, "external"));
-          const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
-          for (const directoryPath of [
-            "../",
-            outside,
-            ".git",
-            "missing",
-            ...(platform !== "win32" ? ["external"] : []),
-          ]) {
-            const error = yield* workspaceEntries.list({ cwd, directoryPath }).pipe(Effect.flip);
-            expect(error._tag).toBe("WorkspaceEntriesReadDirectoryError");
-          }
-        }),
+    it.effect("rejects directory traversal, git internals, and missing folders", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir();
+        const outside = yield* makeTempDir();
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(cwd, ".git/HEAD");
+        yield* writeTextFile(outside, ".git/HEAD");
+        const platform = yield* HostProcess.Platform;
+        if (platform !== "win32") yield* fileSystem.symlink(outside, path.join(cwd, "external"));
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        for (const directoryPath of [
+          "../",
+          outside,
+          ".git",
+          "missing",
+          ...(platform !== "win32" ? ["external/.git", "external/missing"] : []),
+        ]) {
+          const error = yield* workspaceEntries.list({ cwd, directoryPath }).pipe(Effect.flip);
+          expect(error._tag).toBe("WorkspaceEntriesReadDirectoryError");
+        }
+      }),
+    );
+
+    // Following a link to a network path makes Windows sign in to its host with the
+    // user's NTLM credentials, so links are read before anything follows them.
+    it.effect("never follows a link to a network path", () =>
+      Effect.gen(function* () {
+        const platform = yield* HostProcess.Platform;
+        if (platform === "win32") return;
+        const cwd = yield* makeTempDir();
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(cwd, "local.txt");
+        yield* fileSystem.symlink("//attacker.test/share", path.join(cwd, "share"));
+        yield* fileSystem.symlink("share", path.join(cwd, "via-share"));
+        yield* fileSystem.symlink("share/report.md", path.join(cwd, "report.md"));
+        const followed: Array<string> = [];
+        const { realpath, stat, lstat } = NodeFSP;
+        vi.spyOn(NodeFSP, "realpath").mockImplementation(((target: string) => {
+          followed.push(target);
+          return realpath(target);
+        }) as typeof NodeFSP.realpath);
+        vi.spyOn(NodeFSP, "stat").mockImplementation(((target: string) => {
+          followed.push(target);
+          return stat(target);
+        }) as typeof NodeFSP.stat);
+        vi.spyOn(NodeFSP, "lstat").mockImplementation(((target: string) => {
+          if (/^[\\/]{2}/.test(target)) followed.push(target);
+          return lstat(target);
+        }) as typeof NodeFSP.lstat);
+
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        expect((yield* workspaceEntries.list({ cwd, directoryPath: "" })).entries).toEqual([
+          { path: "local.txt", kind: "file" },
+        ]);
+        for (const directoryPath of ["share", "via-share"]) {
+          const error = yield* workspaceEntries.list({ cwd, directoryPath }).pipe(Effect.flip);
+          expect(error._tag).toBe("WorkspaceEntriesReadDirectoryError");
+        }
+        const realCwd = yield* fileSystem.realPath(cwd);
+        expect(followed.filter((target) => target !== cwd && target !== realCwd)).toEqual([]);
+      }),
     );
 
     it.effect("includes images and other binary files in non-git workspace indexes", () =>

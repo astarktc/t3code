@@ -480,7 +480,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
     );
 
     it.effect.skipIf(!symlinksSupported)(
-      "rejects symlinks that resolve outside the workspace root",
+      "reads through symlinks that resolve outside the workspace root",
       () =>
         Effect.gen(function* () {
           const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -488,39 +488,61 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           const path = yield* Path.Path;
           const cwd = yield* makeTempDir;
           const outsideDir = yield* makeTempDir;
-          yield* writeTextFile(outsideDir, "secret.txt", "outside\n");
+          yield* writeTextFile(outsideDir, "REPO-INDEX.md", "# Index\n");
+          yield* writeTextFile(outsideDir, "Cognizant/notes.md", "# Notes\n");
           yield* fileSystem.symlink(
-            path.join(outsideDir, "secret.txt"),
-            path.join(cwd, "linked-secret.txt"),
+            path.join(outsideDir, "REPO-INDEX.md"),
+            path.join(cwd, "REPO-INDEX.md"),
           );
-
-          const error = yield* workspaceFileSystem
-            .readFile({ cwd, relativePath: "linked-secret.txt" })
-            .pipe(Effect.flip);
-          const resolvedWorkspaceRoot = yield* fileSystem.realPath(cwd);
-          const resolvedPath = yield* fileSystem.realPath(path.join(outsideDir, "secret.txt"));
-
-          expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
-          expect(error).toMatchObject({
-            workspaceRoot: cwd,
-            relativePath: "linked-secret.txt",
-            resolvedWorkspaceRoot,
-            resolvedPath,
-          });
-          expect("cause" in error).toBe(false);
-
           yield* fileSystem.symlink(outsideDir, path.join(cwd, "linked-dir"));
-          const missingChildError = yield* workspaceFileSystem
-            .readFile(
-              Object.assign(
-                { cwd, relativePath: "linked-dir/missing/t3.json" },
-                { allowMissing: true },
-              ),
-            )
+
+          for (const [relativePath, contents] of [
+            ["REPO-INDEX.md", "# Index\n"],
+            ["linked-dir/Cognizant/notes.md", "# Notes\n"],
+          ] as const) {
+            expect(yield* workspaceFileSystem.readFile({ cwd, relativePath })).toEqual({
+              relativePath,
+              contents,
+              byteLength: contents.length,
+              truncated: false,
+            });
+          }
+          expect(
+            yield* workspaceFileSystem.readFile({
+              cwd,
+              relativePath: "linked-dir/missing/t3.json",
+              allowMissing: true,
+            }),
+          ).toMatchObject({ exists: false });
+          // A link to a missing file is broken, not absent.
+          yield* fileSystem.symlink(path.join(outsideDir, "gone"), path.join(cwd, "dangling"));
+          const dangling = yield* workspaceFileSystem
+            .readFile({ cwd, relativePath: "dangling/t3.json", allowMissing: true })
             .pipe(Effect.flip);
-          expect(missingChildError).toBeInstanceOf(
-            WorkspaceFileSystem.WorkspaceFilePathEscapeError,
-          );
+          expect(dangling).toMatchObject({ operation: "realpath-target" });
+        }),
+    );
+
+    it.effect.skipIf(!symlinksSupported || HostProcess.Platform.defaultValue() === "win32")(
+      "refuses a link to a network path without following it",
+      () =>
+        Effect.gen(function* () {
+          const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const cwd = yield* makeTempDir;
+          yield* fileSystem.symlink("//attacker.test/s", path.join(cwd, "share"));
+          yield* fileSystem.symlink("share/a.md", path.join(cwd, "a.md"));
+          const realpath = vi.mocked(NodeFSP.realpath).mockClear();
+
+          for (const relativePath of ["share/a.md", "a.md"]) {
+            const error = yield* workspaceFileSystem
+              .readFile({ cwd, relativePath, allowMissing: true })
+              .pipe(Effect.flip);
+            expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
+            expect(error).toMatchObject({ relativePath, resolvedPath: "//attacker.test/s" });
+          }
+          expect(realpath.mock.calls.map(([target]) => target)).toEqual([cwd, cwd]);
         }),
     );
 
