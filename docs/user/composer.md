@@ -170,6 +170,10 @@ File links point to the file on the environment's machine, so moving or deleting
 
 Following an agent's file link to a file outside the workspace opens it read-only. External HTML files cannot load neighboring scripts, styles, or images.
 
+A symbolic link in the project to a folder or file elsewhere on the machine shows in
+Files, and text files through it open there. Changes to them cannot be saved, and
+search does not include them.
+
 ## HTML and PDF files in the file viewer
 
 On web and desktop, HTML and PDF files open rendered (HTML previews are sandboxed from your T3 Code session; line-specific HTML links open source view). On mobile, PDFs open in the native iOS viewer or an installed Android viewer.
