@@ -56,6 +56,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import { isWithinRoot } from "../workspace/KnownWorkspaces.ts";
+import { resolveLocalPath, resolveRealRoot } from "../workspace/resolveLocalPath.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { toWslDrivePath } from "../workspace/wslDrivePath.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
@@ -342,6 +343,37 @@ const resolveCanonicalWorkspaceFileForRequest = (input: {
     Effect.orElseSucceed(() => null),
   );
 
+/**
+ * A link can lead a workspace path outside the root; that file previews like an absolute host
+ * path. Links are read one at a time, so a network target is refused before anything follows it.
+ * `Inside` leaves the path, and any resolution failure, to the in-root checks.
+ */
+const resolveWorkspaceLink = Effect.fn("AssetAccess.resolveWorkspaceLink")(function* (input: {
+  readonly workspaceRoot: string;
+  readonly relativePath: string;
+}) {
+  const path = yield* Path.Path;
+  const inside = { _tag: "Inside" } as const;
+  const canonicalRoot = yield* Effect.promise(() =>
+    resolveRealRoot(input.workspaceRoot).catch(() => null),
+  );
+  if (canonicalRoot === null) return inside;
+  const resolved = yield* Effect.promise(() =>
+    resolveLocalPath(path, {
+      from: canonicalRoot,
+      segments: input.relativePath.split("/"),
+      workspaceRoot: canonicalRoot,
+    }).catch(() => null),
+  );
+  if (resolved === null) return inside;
+  if (resolved._tag === "Network") return { _tag: "Refused" } as const;
+  if (isWithinRoot(path, resolved.realPath, canonicalRoot)) return inside;
+  // The Files tree hides links into a .git folder too.
+  return resolved.realPath.split(path.sep).includes(".git")
+    ? ({ _tag: "Refused" } as const)
+    : ({ _tag: "Outside", realPath: resolved.realPath } as const);
+});
+
 const HEADER_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 
 const readImageDimensionsFromOpenFile = (filePath: string, file: OpenMediaFile) =>
@@ -479,6 +511,21 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
     if (!isDraftMedia && !isWorkspacePreviewEntryPath(resolved.relativePath)) {
       return yield* new AssetPreviewTypeValidationError({
         resource: input.resource,
+      });
+    }
+    const link = yield* resolveWorkspaceLink({
+      workspaceRoot: input.workspaceRoot,
+      relativePath: resolved.relativePath,
+    });
+    if (link._tag === "Refused") {
+      return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+    }
+    // Exact-file claims, so the token grants nothing else in the outside tree.
+    if (link._tag === "Outside") {
+      return yield* finalizeAbsoluteMediaFileAsset({
+        ...input,
+        requestedPath: link.realPath,
+        expectedCanonicalPath: link.realPath,
       });
     }
     const canonicalFile = yield* resolveCanonicalWorkspaceFile({

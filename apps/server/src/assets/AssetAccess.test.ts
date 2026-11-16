@@ -433,7 +433,7 @@ describe("AssetAccess", () => {
   );
 
   it.effect.skipIf(!symlinksSupported)(
-    "rejects draft media symlinks escaping the workspace or targeting disallowed types",
+    "previews draft media symlinks leaving the workspace and rejects disallowed targets",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -445,19 +445,24 @@ describe("AssetAccess", () => {
         const secret = path.join(root, "secret.txt");
         yield* fs.writeFileString(outside, "outside bytes");
         yield* fs.writeFileString(secret, "private bytes");
-        for (const [name, target] of [
-          ["escape.mp4", outside],
-          ["disguised.wav", secret],
-        ] as const) {
-          yield* fs.symlink(target, path.join(root, name));
-          const error = yield* issueAssetUrl({
-            resource: { _tag: "draft-workspace-file", cwd: root, path: name },
-            workspaceRoot: root,
-          }).pipe(Effect.flip);
-          expect(["AssetWorkspaceAssetNotFoundError", "AssetPreviewTypeValidationError"]).toContain(
-            error._tag,
-          );
-        }
+        yield* fs.symlink(outside, path.join(root, "escape.mp4"));
+        const escape = yield* issueAssetUrl({
+          resource: { _tag: "draft-workspace-file", cwd: root, path: "escape.mp4" },
+          workspaceRoot: root,
+        });
+        const suffix = escape.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const separator = suffix.indexOf("/");
+        expect(
+          yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1)),
+        ).toMatchObject({ kind: "file", path: yield* fs.realPath(outside), mimeType: "video/mp4" });
+        yield* fs.symlink(secret, path.join(root, "disguised.wav"));
+        const error = yield* issueAssetUrl({
+          resource: { _tag: "draft-workspace-file", cwd: root, path: "disguised.wav" },
+          workspaceRoot: root,
+        }).pipe(Effect.flip);
+        expect(["AssetWorkspaceAssetNotFoundError", "AssetPreviewTypeValidationError"]).toContain(
+          error._tag,
+        );
       }).pipe(Effect.provide(layerTest)),
   );
 
@@ -710,6 +715,12 @@ describe("AssetAccess", () => {
         const error = yield* issueAssetUrl({ resource }).pipe(Effect.flip);
         expect(error._tag).toBe("AssetWorkspaceAssetNotFoundError");
       }
+      yield* fs.symlink(config.dbPath, path.join(root, "state.sqlite"));
+      const linkedStateError = yield* issueAssetUrl({
+        resource: { _tag: "workspace-file", threadId, path: "state.sqlite" },
+        workspaceRoot: root,
+      }).pipe(Effect.flip);
+      expect(linkedStateError._tag).toBe("AssetWorkspaceAssetNotFoundError");
 
       const icon = path.join(config.baseDir, "icon.png");
       yield* fs.symlink(stateFile, icon);
@@ -977,6 +988,36 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("keeps sibling assets for a workspace opened under another letter case", () =>
+    // A case-insensitive volume opens `Project` as `PROJECT`; the HTML must stay folder-scoped.
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-asset-case-" });
+      const root = path.join(parent, "Project");
+      yield* fileSystem.makeDirectory(root);
+      const otherCaseRoot = path.join(parent, "PROJECT");
+      if (!(yield* fileSystem.exists(otherCaseRoot))) return; // case-sensitive volume
+      yield* fileSystem.writeFileString(
+        path.join(root, "report.html"),
+        '<link rel="stylesheet" href="report.css">',
+      );
+      yield* fileSystem.writeFileString(path.join(root, "report.css"), "body { color: red; }");
+
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: path.join(otherCaseRoot, "report.html"),
+        },
+        workspaceRoot: otherCaseRoot,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const token = suffix.slice(0, suffix.indexOf("/"));
+      expect(yield* resolveAsset(token, "report.css")).toMatchObject({ kind: "file" });
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("issues workspace URLs that resolve the entry file and sibling assets", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1113,6 +1154,126 @@ describe("AssetAccess", () => {
       });
       expect(error.cause).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.skipIf(!symlinksSupported)(
+    "previews a file under a link that leaves the workspace by its exact path",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-asset-linked-root-" });
+        const outside = yield* fs.makeTempDirectoryScoped({ prefix: "t3-asset-linked-outside-" });
+        yield* fs.makeDirectory(path.join(outside, "repo", ".git"), { recursive: true });
+        for (const [name, contents] of [
+          ["photo.png", "png bytes"],
+          ["page.html", '<link rel="stylesheet" href="page.css">'],
+          ["page.css", "body {}"],
+          ["notes.txt", "private"],
+          ["repo/.git/x.png", "git bytes"],
+        ] as const) {
+          yield* fs.writeFileString(path.join(outside, name), contents);
+        }
+        yield* fs.writeFileString(path.join(root, "report.html"), "<p>inside</p>");
+        yield* fs.writeFileString(path.join(root, "report.css"), "body {}");
+        yield* fs.symlink(outside, path.join(root, "linked"));
+        yield* fs.symlink(path.join(outside, "notes.txt"), path.join(root, "notes.png"));
+        yield* fs.symlink(path.join(outside, "repo", ".git"), path.join(root, "gitdir"));
+        yield* fs.symlink(path.join(outside, "gone.png"), path.join(root, "dangling.png"));
+        const threadId = ThreadId.make("thread-1");
+        const tokenAndName = (relativeUrl: string) => {
+          const suffix = relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+          return [suffix.slice(0, suffix.indexOf("/")), suffix.slice(suffix.indexOf("/") + 1)];
+        };
+
+        for (const [name, contents, mimeType] of [
+          ["photo.png", "png bytes", "image/png"],
+          ["page.html", '<link rel="stylesheet" href="page.css">', "text/html; charset=utf-8"],
+        ] as const) {
+          for (const resource of [
+            { _tag: "workspace-file" as const, threadId, path: path.join(root, "linked", name) },
+            { _tag: "draft-workspace-file" as const, cwd: root, path: `linked/${name}` },
+          ]) {
+            const result = yield* issueAssetUrl({ resource, workspaceRoot: root });
+            const [token, fileName] = tokenAndName(result.relativeUrl);
+            const asset = yield* resolveAsset(token!, fileName!);
+            expect(asset).toMatchObject({
+              kind: "file",
+              path: yield* fs.realPath(path.join(outside, name)),
+            });
+            if (asset?.kind !== "file") throw new Error("Expected a linked file");
+            const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
+            expect(response.headers.get("content-type")).toBe(mimeType);
+            expect(yield* Effect.promise(() => response.text())).toBe(contents);
+            // Exact-file claims: an outside tree is never granted by folder.
+            expect(yield* resolveAsset(token!, "page.css")).toBeNull();
+          }
+        }
+        const inside = yield* issueAssetUrl({
+          resource: { _tag: "workspace-file", threadId, path: path.join(root, "report.html") },
+          workspaceRoot: root,
+        });
+        expect(yield* resolveAsset(tokenAndName(inside.relativeUrl)[0]!, "report.css")).toEqual({
+          kind: "file",
+          path: yield* fs.realPath(path.join(root, "report.css")),
+        });
+
+        for (const [requestedPath, tag] of [
+          ["gitdir/x.png", "AssetWorkspaceAssetNotFoundError"],
+          ["dangling.png", "AssetWorkspaceAssetNotFoundError"],
+          ["notes.png", "AssetPreviewTypeValidationError"],
+          ["linked/notes.txt", "AssetPreviewTypeValidationError"],
+        ] as const) {
+          const error = yield* issueAssetUrl({
+            resource: { _tag: "workspace-file", threadId, path: requestedPath },
+            workspaceRoot: root,
+          }).pipe(Effect.flip);
+          expect(error._tag).toBe(tag);
+        }
+      }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.skipIf(!symlinksSupported || HostProcess.Platform.defaultValue() === "win32")(
+    "refuses a workspace link to a network path without following it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-asset-network-link-" });
+        yield* fs.symlink("//attacker.test/s", path.join(root, "share"));
+        yield* fs.symlink("share/a.png", path.join(root, "a.png"));
+        const resolved: Array<string> = [];
+        const recordingFileSystem = FileSystem.FileSystem.of({
+          ...fs,
+          realPath: (requestedPath) => {
+            resolved.push(requestedPath);
+            return fs.realPath(requestedPath);
+          },
+        });
+        const realpath = vi.mocked(NodeFSP.realpath).mockClear();
+        for (const relativePath of ["share/a.png", "a.png"]) {
+          for (const resource of [
+            {
+              _tag: "workspace-file" as const,
+              threadId: ThreadId.make("thread-1"),
+              path: relativePath,
+            },
+            { _tag: "draft-workspace-file" as const, cwd: root, path: relativePath },
+          ]) {
+            const error = yield* issueAssetUrl({ resource, workspaceRoot: root }).pipe(
+              Effect.provideService(FileSystem.FileSystem, recordingFileSystem),
+              Effect.flip,
+            );
+            expect(error._tag).toBe("AssetWorkspaceAssetNotFoundError");
+          }
+        }
+        const canonicalRoot = yield* fs.realPath(root);
+        expect(
+          [...resolved, ...realpath.mock.calls.map(([target]) => String(target))].filter(
+            (target) => target !== root && target !== canonicalRoot,
+          ),
+        ).toEqual([]);
+      }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("issues exact workspace URLs for every non-HTML preview", () =>
